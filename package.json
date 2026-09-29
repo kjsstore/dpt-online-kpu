@@ -1,0 +1,21 @@
+{
+  "name": "dpt-online",
+  "version": "1.0.0",
+  "main": "bot.js",
+  "scripts": {
+    "start": "pm2 start ecosystem.config.js",
+    "stop": "pm2 stop all",
+    "restart": "pm2 restart all"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^7.0.0-rc14",
+    "axios": "^1.6.0",
+    "canvas": "^3.2.3",
+    "cfonts": "^3.3.1",
+    "express": "^4.22.3",
+    "multer": "^2.4.0",
+    "node-telegram-bot-api": "^0.64.0",
+    "qrcode": "^1.5.4",
+    "xlsx": "^0.18.5"
+  }
+}

@@ -1,0 +1,31 @@
+#!/bin/bash
+
+# Update package list
+sudo apt update && sudo apt upgrade -y
+
+# Install curl (kalau belum ada)
+sudo apt install -y curl
+
+# Setup Node.js v25 repository
+curl -fsSL https://deb.nodesource.com/setup_25.x | sudo -E bash -
+
+# Install Node.js
+sudo apt install -y nodejs
+
+# Cek versi Node & npm
+node -v
+npm -v
+
+# Install PM2 secara global
+sudo npm install -g pm2
+
+# Cek versi PM2
+pm2 -v
+
+npm init -y
+npm install node-telegram-bot-api axios fs
+
+# Setup PM2 startup (auto start saat boot)
+pm2 start ecosystem.config.js
+
+echo "✅ Node.js v25 dan PM2 berhasil diinstall!"

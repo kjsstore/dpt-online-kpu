@@ -1,0 +1,70 @@
+# ==========================================
+# 🔥 GITIGNORE - JANGAN UPLOAD FILE SENSITIF
+# ==========================================
+
+# Dependencies
+node_modules/
+package-lock.json
+yarn.lock
+
+# Environment & Config
+.env
+.env.*
+config.js
+config.json
+settings.json
+*.bak
+*.bak_*
+*.backup
+
+# Session WhatsApp (SANGAT SENSITIF!)
+sessions/
+wa-sessions/
+creds.json
+sessions.bak_*
+wa-bot/sessions.bak_*
+*.session
+
+# Database
+*.sqlite
+*.sqlite3
+*.db
+*.sql
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+
+# Uploads & Temp
+uploads/
+tmp/
+temp/
+backups/
+screenshots/
+*.xlsx
+
+# Data User (SENSITIF!)
+users.json
+sewa_aktif.json
+saldo.json
+nomor_bot.json
+detected_data.json
+daerah_user.json
+sentStatus.json
+qr_flag.json
+baileys_store.json
+admins.json
+hasil_cek_dpt.json
+pending_data.json
+qr_current.png
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
