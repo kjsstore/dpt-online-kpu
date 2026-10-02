@@ -58,6 +58,34 @@ Bot ini dibuat untuk **mempermudah cek DPT KPU secara massal** — upload file E
 | Storage | 10 GB |
 | Node.js | 20.x |
 | Koneksi | Stabil |
+| Chrome | WAJIB terpasang (untuk cek DPT) |
+
+### Environment Variable Cek DPT
+
+Cek DPT memakai reCAPTCHA v2. Tanpa solver, semua permintaan akan
+dibalas `INVALID_CAPTCHA` dan bot berhenti dengan status
+`captcha_failed`.
+
+| Variable | Keterangan |
+|---|---|
+| `CAPTCHA_API_KEY` | API key 2Captcha. Kosongkan untuk menonaktifkan solver. |
+
+```bash
+# .env (tidak ter-commit, sudah masuk .gitignore)
+CAPTCHA_API_KEY=xxxxxxxxxxxxxxxx
+```
+
+```bash
+# systemd / pm2
+export CAPTCHA_API_KEY=xxxxxxxxxxxxxxxx
+```
+
+> API key **tidak pernah** ditulis di dalam `.js`. Repository ini publik,
+> jadi menulis hardcode di source berarti siapa pun bisa memakai saldomu.
+
+Kalau key tidak diset atau saldonya habis, bot tetap jalan normal dan
+melaporkan `captcha_failed` beserta alasannya — bukan diam-diam
+menyatakan NIK "tidak terdaftar".
 
 ---
 

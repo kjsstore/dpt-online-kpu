@@ -153,6 +153,101 @@ function resetCaptchaApiState() {
 }
 
 // ==========================================
+// 🔥 SOLVE reCAPTCHA VIA 2CAPTCHA
+// ==========================================
+// Situs KPU memakai reCAPTCHA v2 checkbox. Checkbox-nya tidak bisa
+// diklik normal dari otomasimu (elemennya berukuran 0x0 sehingga klik
+// tidak menghasilkan token), jadi token diambil dari 2Captcha lalu
+// disuntik ke textarea g-recaptcha-response sebelum form dikirim.
+async function detectSiteKey() {
+    if (!pageInstance) return null;
+    try {
+        const key = await pageInstance.evaluate(() => {
+            const el = document.querySelector('[data-sitekey]');
+            if (el && el.getAttribute('data-sitekey')) return el.getAttribute('data-sitekey');
+
+            // Fallback: sitekey ikut di URL iframe anchor reCAPTCHA.
+            const f = [...document.querySelectorAll('iframe')].find((x) => /recaptcha/i.test(x.src || ''));
+            if (f) {
+                const m = (f.src || '').match(/k=([A-Za-z0-9_-]+)/);
+                if (m) return m[1];
+            }
+
+            // Fallback terakhir: cari pola site key di HTML.
+            const m = document.documentElement.outerHTML.match(/6L[A-Za-z0-9_-]{38}/);
+            return m ? m[0] : null;
+        });
+        return key || null;
+    } catch (e) {
+        return null;
+    }
+}
+
+async function hasCaptchaWidget() {
+    if (!pageInstance) return false;
+    try {
+        return await pageInstance.evaluate(() =>
+            !!document.querySelector('textarea[name="g-recaptcha-response"], input[name="g-recaptcha-response"]') ||
+            !!document.querySelector('iframe[src*="recaptcha"]')
+        );
+    } catch (e) {
+        return false;
+    }
+}
+
+/**
+ * Minta 2Captcha menyelesaikan captcha lalu suntikkan tokennya ke form.
+ * @returns {Promise<{ok:boolean, reason?:string, tokenLength?:number}>}
+ */
+async function solveCaptchaWith2Captcha() {
+    const solver = require('./captcha-solver.js');
+
+    if (!solver.isEnabled()) {
+        return { ok: false, reason: 'CAPTCHA_API_KEY belum diset (captcha tidak bisa diselesaikan otomatis)' };
+    }
+
+    const siteKey = await detectSiteKey();
+    if (!siteKey) return { ok: false, reason: 'siteKey reCAPTCHA tidak ditemukan di halaman' };
+
+    try {
+        const { token } = await solver.solve(pageInstance.url(), siteKey);
+
+        // Suntik token. Widget sengaja dinonaktifkan dulu supaya tidak
+        // menimpa atau membatalkan token yang baru disuntikkan.
+        const injected = await pageInstance.evaluate((val) => {
+            let el = document.querySelector('textarea[name="g-recaptcha-response"]');
+            if (!el) {
+                el = document.createElement('textarea');
+                el.name = 'g-recaptcha-response';
+                el.id = 'g-recaptcha-response';
+                el.style.display = 'none';
+                document.body.appendChild(el);
+            }
+            el.value = val;
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            return el.value.length;
+        }, token);
+
+        // responseCallback: site sering memanggil grecaptcha.getResponse()
+        // alih-alih membaca textarea. Dioverride supaya sama-sama kena.
+        await pageInstance.evaluate((val) => {
+            if (window.grecaptcha && typeof window.grecaptcha.getResponse === 'function') {
+                window.grecaptcha.getResponse = () => val;
+            }
+        }, token).catch(() => {});
+
+        await pageInstance.waitForTimeout(400);
+        console.log(`✅ [2CAPTCHA] Token disuntik ke form (${injected} karakter)`);
+        return { ok: true, tokenLength: injected };
+    } catch (e) {
+        console.log(`❌ [2CAPTCHA] Gagal: ${e.message}`);
+        return { ok: false, reason: e.message, hint: e.hint };
+    }
+}
+
+
+// ==========================================
 // 🔥 STATE
 // ==========================================
 let globalOtp = null;
@@ -1079,6 +1174,24 @@ async function checkSingleNik(nik, phoneNumber = null) {
                 // STEP 4: KLIK LANGKAH 3/4
                 // ==============================
                 console.log('🔘 [STEP 4] Klik tombol "Langkah 3/4"...');
+
+                // ==============================
+                // STEP 3.9: SELESAIKAN CAPTCHA DULU
+                // ==============================
+                // Tombol "Langkah 3/4" memancing panggilan findNikPilkada
+                // yang dilindungi reCAPTCHA. Kalau token belum ada, server
+                // pasti membalas INVALID_CAPTCHA. Jadi token wajib tersedia
+                // SEBELUM tombol diklik.
+                if (await hasCaptchaWidget()) {
+                    console.log('🔒 [STEP 3.9] Widget reCAPTCHA terdeteksi — minta token ke 2Captcha...');
+                    const solved = await solveCaptchaWith2Captcha();
+                    if (!solved.ok) {
+                        console.log(`⚠️ [STEP 3.9] Captcha belum terselesaikan: ${solved.reason}`);
+                        if (solved.hint) console.log(`💡 [STEP 3.9] ${solved.hint}`);
+                    }
+                } else {
+                    console.log('ℹ️ [STEP 3.9] Tidak ada widget reCAPTCHA di halaman ini');
+                }
 
                 async function findStep3Button(timeout = 8000) {
                     const start = Date.now();
