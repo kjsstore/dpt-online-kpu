@@ -23,6 +23,7 @@ const crypto = require('crypto');
 const express = require('express');
 const wabotPayment = require('./wabot_payment.js');
 const kpuIntegration = require('./kpu-integration.js');
+const kpuIntegrationV2 = require('./kpu-integration-v2.js');  // ← TAMBAH INI
 const kpuChecker = require('./kpu_checker.js');
 const { parseWilayah } = require('./wilayah-lookup');
 
@@ -1902,7 +1903,8 @@ try {
     chatId: chatId,
     result: `⏳ Memproses ${fileName}...`,
     status: 'processing',
-    fileName: fileName
+    fileName: fileName,
+    version: 'v1'   // ← TAMBAHKAN INI
   });
   // Simpan message_id untuk dihapus nanti
   if (processingRes.data && processingRes.data.messageId) {
@@ -2006,11 +2008,12 @@ try {
           const base64Excel = excelBuffer.toString('base64');
           const fileNameHasil = `Hasil_Cek_DPT_${timestamp}.xlsx`;
           
-          await axios.post('http://localhost:3004/send-cekdpt-file', {
+                    await axios.post('http://localhost:3004/send-cekdpt-file', {
             chatId: chatId,
             fileName: fileNameHasil,
             fileBase64: base64Excel,
-            caption: `📊 *HASIL CEK DPT*\n\nTotal: ${nikList.length} NIK\n✅ ${successCount} | ⚠️ ${notRegCount} | ❌ ${failedCount}`
+            caption: `📌 *HASIL CEK DPT V1*\n\nTotal: ${nikList.length} NIK\n✅ ${successCount} | ⚠️ ${notRegCount} | ❌ ${failedCount}`,
+            version: 'v1'   // ← TAMBAHKAN INI
           }, { timeout: 30000 }).catch(err => {
             console.log(`⚠️ [CEKDPT-TG] Gagal kirim file Excel: ${err.message}`);
           });
@@ -2034,7 +2037,8 @@ try {
           chatId: chatId,
           result: `❌ *Gagal memproses file:*\n\n${error.message}`,
           status: 'error',
-          fileName: fileName
+          fileName: fileName,
+          version: 'v1'   // ← TAMBAHKAN INI
         }).catch(() => {});
       }
     });
@@ -2045,6 +2049,410 @@ try {
   }
 });
 
+// ==========================================
+// 🔥 ENDPOINT: TERIMA FILE CEK DPT V2 DARI TELEGRAM
+// ==========================================
+app.post('/api/cekdpt-v2-from-telegram', async (req, res) => {
+  try {
+    const { chatId, userId, username, fileUrl, fileName } = req.body;
+    
+    console.log(`📥 [CEKDPT V2-TG] Terima dari Telegram: ${fileName}`);
+    console.log(`📥 [CEKDPT V2-TG] User: ${username} (${chatId})`);
+    
+    if (!chatId || !fileUrl) {
+      return res.status(400).json({ success: false, error: 'chatId & fileUrl required' });
+    }
+    
+    res.json({ success: true, message: 'File V2 diterima, sedang diproses' });
+    
+    setImmediate(async () => {
+      let excelPath = null;
+      let tmpPath = null;
+      try {
+        const uploadsDir = path.join(__dirname, 'uploads');
+        if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+        
+        const safeName = (fileName || 'file.xlsx').replace(/[^a-zA-Z0-9._-]/g, '_');
+        tmpPath = path.join(uploadsDir, `cekdpt_v2_tg_${Date.now()}_${safeName}`);
+        
+        console.log(`📥 [CEKDPT V2-TG] Download: ${fileUrl}`);
+        const fileResp = await axios.get(fileUrl, { 
+          responseType: 'arraybuffer',
+          timeout: 30000 
+        });
+        fs.writeFileSync(tmpPath, Buffer.from(fileResp.data));
+        console.log(`✅ [CEKDPT V2-TG] File disimpan: ${tmpPath}`);
+        
+        // Notif processing
+        let processingMsgId = null;
+        try {
+          const processingRes = await axios.post('http://localhost:3004/send-cekdpt-result', {
+            chatId: chatId,
+            result: `⏳ Memproses V2 ${fileName}...`,
+            status: 'processing',
+            fileName: fileName,
+            version: 'v2'
+          });
+          if (processingRes.data && processingRes.data.messageId) {
+            processingMsgId = processingRes.data.messageId;
+          }
+        } catch (e) {
+          console.log('⚠️ Gagal kirim notif processing V2:', e.message);
+        }
+        
+        // Baca NIK
+        console.log(`🔍 [CEKDPT V2-TG] Membaca NIK dari Excel...`);
+        const nikList = kpuChecker.readNikFromExcel(tmpPath);
+        
+        if (nikList.length === 0) {
+          throw new Error('Tidak ada NIK ditemukan di file Excel');
+        }
+        
+        console.log(`✅ [CEKDPT V2-TG] Ditemukan ${nikList.length} NIK`);
+        
+        await kpuChecker.initBrowser();
+        
+        const results = [];
+        for (let i = 0; i < nikList.length; i++) {
+          const nik = nikList[i];
+          console.log(`📋 [CEKDPT V2-TG] ${i + 1}/${nikList.length} - NIK: ${nik}`);
+          
+          try {
+            const result = await kpuChecker.checkSingleNik(nik);
+            results.push(result);
+            
+            if (result.status === 'success') {
+              console.log(`   ✅ ${result.data?.nama || '-'} | ${result.data?.status || '-'}`);
+            } else if (result.status === 'not_registered') {
+              console.log(`   ⚠️ TIDAK TERDAFTAR`);
+            } else {
+              console.log(`   ❌ ${result.error || 'Gagal'}`);
+            }
+          } catch (err) {
+            console.log(`   ❌ Error NIK ${nik}: ${err.message}`);
+            results.push({
+              nik: nik,
+              status: 'error',
+              error: err.message,
+              data: null
+            });
+          }
+          
+          if (i < nikList.length - 1) {
+            await new Promise(r => setTimeout(r, 1000));
+          }
+        }
+        
+        await kpuChecker.closeBrowser();
+        
+        const { buildExcel } = require('./excel-builder');
+
+        results.forEach(r => {
+          if (r.data && r.data.wilayah) {
+            const w = parseWilayah(r.data.wilayah);
+            r.data.provinsi = w.provinsi;
+            r.data.kabupaten = w.kabupaten;
+            r.data.kecamatan = w.kecamatan;
+            r.data.kelurahan = w.kelurahan;
+          }
+        });
+
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        excelPath = path.join(uploadsDir, `Hasil_Cek_DPT_V2_${timestamp}.xlsx`);
+        await buildExcel(results, excelPath);
+        console.log(`📊 [CEKDPT V2-TG] Excel tersimpan: ${excelPath}`);
+        
+        const successCount = results.filter(r => r.status === 'success').length;
+        const notRegCount = results.filter(r => r.status === 'not_registered').length;
+        const failedCount = results.filter(r => r.status !== 'success' && r.status !== 'not_registered').length;
+        
+        // Hapus notif processing
+        if (processingMsgId) {
+          try {
+            await axios.post('http://localhost:3004/delete-message', {
+              chatId: chatId,
+              messageId: processingMsgId
+            });
+            console.log(`🗑️ [CEKDPT V2-TG] Notif processing dihapus`);
+          } catch (e) {
+            console.log('⚠️ Gagal hapus notif processing:', e.message);
+          }
+        }
+        
+        // Kirim file Excel V2
+        try {
+          const excelBuffer = fs.readFileSync(excelPath);
+          const base64Excel = excelBuffer.toString('base64');
+          const fileNameHasil = `Hasil_Cek_DPT_V2_${timestamp}.xlsx`;
+          
+          await axios.post('http://localhost:3004/send-cekdpt-file', {
+            chatId: chatId,
+            fileName: fileNameHasil,
+            fileBase64: base64Excel,
+            caption: `🆕 *HASIL CEK DPT V2*\n\nTotal: ${nikList.length} NIK\n✅ ${successCount} | ⚠️ ${notRegCount} | ❌ ${failedCount}`,
+            version: 'v2'
+          }, { timeout: 30000 }).catch(err => {
+            console.log(`⚠️ [CEKDPT V2-TG] Gagal kirim file Excel: ${err.message}`);
+          });
+          
+          console.log(`✅ [CEKDPT V2-TG] File Excel terkirim ke Telegram`);
+        } catch (fileErr) {
+          console.log(`⚠️ [CEKDPT V2-TG] Gagal baca file Excel: ${fileErr.message}`);
+        }
+        
+        try { fs.unlinkSync(tmpPath); } catch (e) {}
+        try { fs.unlinkSync(excelPath); } catch (e) {}
+        
+      } catch (error) {
+        console.log(`❌ [CEKDPT V2-TG] Error:`, error.message);
+        
+        try { await kpuChecker.closeBrowser(); } catch (e) {}
+        
+        await axios.post('http://localhost:3004/send-cekdpt-result', {
+          chatId: chatId,
+          result: `❌ *Gagal memproses file V2:*\n\n${error.message}`,
+          status: 'error',
+          fileName: fileName,
+          version: 'v2'
+        }).catch(() => {});
+      }
+    });
+    
+  } catch (error) {
+    console.log('❌ [CEKDPT V2-TG] Error:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==========================================
+// 🔥 ENDPOINT: TERIMA NIK TEKS V2 DARI TELEGRAM
+// ==========================================
+app.post('/api/cekdpt-v2-from-nik', async (req, res) => {
+  try {
+    const { chatId, userId, username, nikList } = req.body;
+    
+    console.log(`📥 [CEKDPT V2-NIK] Terima dari Telegram: ${nikList?.length || 0} NIK`);
+    console.log(`📥 [CEKDPT V2-NIK] User: ${username} (${chatId})`);
+    
+    if (!chatId || !nikList || !Array.isArray(nikList)) {
+      return res.status(400).json({ success: false, error: 'chatId & nikList required' });
+    }
+    
+    if (nikList.length === 0) {
+      return res.status(400).json({ success: false, error: 'NIK list kosong' });
+    }
+    
+    if (nikList.length > 50) {
+      return res.status(400).json({ success: false, error: 'Maksimal 50 NIK' });
+    }
+    
+    res.json({ success: true, message: `${nikList.length} NIK diterima, sedang diproses` });
+    
+    setImmediate(async () => {
+      let excelPath = null;
+      try {
+        // Notif processing
+        let processingMsgId = null;
+        try {
+          const processingRes = await axios.post('http://localhost:3004/send-cekdpt-result', {
+            chatId: chatId,
+            result: `⏳ Memproses V2 (${nikList.length} NIK)...`,
+            status: 'processing',
+            version: 'v2'
+          });
+          if (processingRes.data && processingRes.data.messageId) {
+            processingMsgId = processingRes.data.messageId;
+          }
+        } catch (e) {
+          console.log('⚠️ Gagal kirim notif processing V2:', e.message);
+        }
+        
+        // Init browser
+        await kpuChecker.initBrowser();
+        
+        const results = [];
+        for (let i = 0; i < nikList.length; i++) {
+          const nik = String(nikList[i]).replace(/[^0-9]/g, '');
+          if (nik.length !== 16) continue;
+          
+          console.log(`📋 [CEKDPT V2-NIK] ${i + 1}/${nikList.length} - NIK: ${nik}`);
+          
+          try {
+            const result = await kpuChecker.checkSingleNik(nik);
+            results.push(result);
+            
+            if (result.status === 'success') {
+              console.log(`   ✅ ${result.data?.nama || '-'} | ${result.data?.status || '-'}`);
+            } else if (result.status === 'not_registered') {
+              console.log(`   ⚠️ TIDAK TERDAFTAR`);
+            } else {
+              console.log(`   ❌ ${result.error || 'Gagal'}`);
+            }
+          } catch (err) {
+            console.log(`   ❌ Error NIK ${nik}: ${err.message}`);
+            results.push({ nik, status: 'error', error: err.message, data: null });
+          }
+          
+          if (i < nikList.length - 1) {
+            await new Promise(r => setTimeout(r, 1000));
+          }
+        }
+        
+        await kpuChecker.closeBrowser();
+        
+        // Enrich wilayah
+        const { parseWilayah } = require('./wilayah-lookup');
+        results.forEach(r => {
+          if (r.data && r.data.wilayah) {
+            const w = parseWilayah(r.data.wilayah);
+            r.data.provinsi = w.provinsi;
+            r.data.kabupaten = w.kabupaten;
+            r.data.kecamatan = w.kecamatan;
+            r.data.kelurahan = w.kelurahan;
+          }
+        });
+        
+        const successCount = results.filter(r => r.status === 'success').length;
+        const notRegCount = results.filter(r => r.status === 'not_registered').length;
+        const failedCount = results.filter(r => r.status !== 'success' && r.status !== 'not_registered').length;
+        
+        // 🔥 HAPUS notif processing
+        if (processingMsgId) {
+          try {
+            await axios.post('http://localhost:3004/delete-message', {
+              chatId: chatId, messageId: processingMsgId
+            });
+          } catch (e) {}
+        }
+        
+        // ==========================================
+        // 🔥 KONDISIONAL: ≤ 10 = TEKS, > 10 = EXCEL
+        // ==========================================
+        if (nikList.length <= 10) {
+          console.log(`📝 [CEKDPT V2-NIK] Mode TEKS (${nikList.length} NIK ≤ 10)`);
+          
+          // 🔥 BUILD HASIL TEKS DETAIL
+                    // 🔥 BUILD HASIL TEKS DETAIL (FORMAT CANTIK)
+          const now = new Date();
+          const tglStr = now.toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" });
+          const jamStr = now.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }).replace(/\./g, ":");
+
+          let textResult = `╭ ───┈ " 🆕 " ── ⬦ ׁ\n`;
+          textResult += `├  HASIL CEK DPT V2\n`;
+          textResult += `╰─┈꯭─꯭──꯭─꯭─꯭──꯭─╌─꯭─꯭─꯭─꯭──꯭──꯭\n\n`;
+          textResult += `📊 Total NIK: ${nikList.length}\n`;
+          textResult += `✅ Terdaftar: ${successCount}\n`;
+          textResult += `⚠️ Tidak Terdaftar: ${notRegCount}\n`;
+          textResult += `❌ Error: ${failedCount}\n\n`;
+          textResult += `━━━━━━━━━━━━━━━━━━━━\n`;
+
+          results.forEach((r, i) => {
+            const no = String(i + 1).padStart(2, "0");
+            textResult += `\n${no}. `;
+
+            if (r.status === "success" && r.data) {
+              textResult += `🟢 DATA TERDAFTAR\n\n`;
+              textResult += `🆔 NIK: \`${r.nik}\`\n`;
+              textResult += `👤 Nama: ${r.data.nama || "-"}\n`;
+              textResult += `📌 Status: ${r.data.status || "-"}\n`;
+              textResult += `✅ Validasi: ${r.data.validasi || "-"}\n`;
+
+              if (r.data.wilayah && r.data.wilayah !== "-") {
+                try {
+                  const w = parseWilayah(r.data.wilayah);
+                  if (w.provinsi && w.provinsi !== "-") textResult += `🏛️ Provinsi: ${w.provinsi}\n`;
+                  if (w.kabupaten && w.kabupaten !== "-") textResult += `🏢 Kabupaten: ${w.kabupaten}\n`;
+                  if (w.kecamatan && w.kecamatan !== "-") textResult += `📍 Kecamatan: ${w.kecamatan}\n`;
+                  if (w.kelurahan && w.kelurahan !== "-") textResult += `🏠 Kelurahan: ${w.kelurahan}\n`;
+                } catch (e) {
+                  textResult += `📍 Wilayah: ${r.data.wilayah}\n`;
+                }
+              }
+
+              textResult += `🕐 ${tglStr} • ${jamStr} WIB\n`;
+            } else if (r.status === "not_registered") {
+              textResult += `⚠️ DATA TIDAK TERDAFTAR\n\n`;
+              textResult += `🆔 NIK: \`${r.nik}\`\n`;
+              textResult += `⚠️ Status: TIDAK TERDAFTAR\n`;
+            } else {
+              textResult += `❌ ERROR\n\n`;
+              textResult += `🆔 NIK: \`${r.nik}\`\n`;
+              textResult += `❌ Error: ${r.error || "Unknown"}\n`;
+            }
+
+            textResult += `\n━━━━━━━━━━━━━━━━━━━━\n`;
+          });
+
+          textResult += `\n━━━━━━━━━━━━━━━━━━━━`;
+     
+          
+          // Kirim via bridge (tanpa file)
+          await axios.post('http://localhost:3004/send-cekdpt-result', {
+            chatId: chatId,
+            result: textResult,
+            status: 'success',
+            version: 'v2',
+            raw: true   // flag biar bridge gak format ulang
+          }, { timeout: 30000 }).catch(err => {
+            console.log(`⚠️ Gagal kirim teks: ${err.message}`);
+          });
+          
+          console.log(`✅ [CEKDPT V2-NIK] Hasil teks terkirim`);
+          
+        } else {
+          console.log(`📊 [CEKDPT V2-NIK] Mode EXCEL (${nikList.length} NIK > 10)`);
+          
+          // Bikin Excel
+          const { buildExcel } = require('./excel-builder');
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+          const uploadsDir = path.join(__dirname, 'uploads');
+          if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+          excelPath = path.join(uploadsDir, `Hasil_Cek_DPT_V2_${timestamp}.xlsx`);
+          await buildExcel(results, excelPath);
+          console.log(`📊 Excel tersimpan: ${excelPath}`);
+          
+          // Kirim file Excel via bridge
+          try {
+            const excelBuffer = fs.readFileSync(excelPath);
+            const base64Excel = excelBuffer.toString('base64');
+            
+            await axios.post('http://localhost:3004/send-cekdpt-file', {
+              chatId: chatId,
+              fileName: `Hasil_Cek_DPT_V2_${timestamp}.xlsx`,
+              fileBase64: base64Excel,
+              caption: `🆕 *HASIL CEK DPT V2*\n\nTotal: ${nikList.length} NIK\n✅ ${successCount} | ⚠️ ${notRegCount} | ❌ ${failedCount}`,
+              version: 'v2'
+            }, { timeout: 30000 }).catch(err => {
+              console.log(`⚠️ Gagal kirim file: ${err.message}`);
+            });
+            
+            console.log(`✅ [CEKDPT V2-NIK] File Excel terkirim`);
+          } catch (fileErr) {
+            console.log(`⚠️ Gagal baca Excel: ${fileErr.message}`);
+          }
+          
+          // Hapus file
+          try { fs.unlinkSync(excelPath); } catch (e) {}
+        }
+        
+      } catch (error) {
+        console.log(`❌ [CEKDPT V2-NIK] Error:`, error.message);
+        try { await kpuChecker.closeBrowser(); } catch (e) {}
+        
+        await axios.post('http://localhost:3004/send-cekdpt-result', {
+          chatId: chatId,
+          result: `❌ *Gagal memproses V2:*\n\n${error.message}`,
+          status: 'error',
+          version: 'v2'
+        }).catch(() => {});
+      }
+    });
+    
+  } catch (error) {
+    console.log('❌ [CEKDPT V2-NIK] Error:', error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 app.post('/api/sync-sewa-data', (req, res) => {
   try {
@@ -2623,27 +3031,32 @@ app.post('/broadcast-wa', async (req, res) => {
         console.log(`📝 Pesan: ${message?.substring(0, 50)}...`);
         
         const allContacts = Object.keys(contacts).filter(j => j.endsWith('@s.whatsapp.net'));
-        
-        let sent = 0;
-        let failed = 0;
-        
-        for (const contact of allContacts) {
-            try {
-                await sock.sendMessage(contact, { text: message });
-                sent++;
-                await sleep(1000);
-            } catch (e) {
-                failed++;
-                console.log(`❌ Gagal kirim ke ${contact}:`, e.message);
-            }
-        }
-        
-        res.json({
-            status: 'success',
-            total: allContacts.length,
-            sent: sent,
-            failed: failed
-        });
+
+const sock = global.sock;
+if (!sock) {
+    return res.status(503).json({ error: 'Bot belum connect' });
+}
+
+let sent = 0;
+let failed = 0;
+
+for (const contact of allContacts) {
+    try {
+        await sock.sendMessage(contact, { text: message });
+        sent++;
+        await sleep(1000);
+    } catch (e) {
+        failed++;
+        console.log(`❌ Gagal kirim ke ${contact}:`, e.message);
+    }
+}
+
+res.json({
+    status: 'success',
+    total: allContacts.length,
+    sent: sent,
+    failed: failed
+});
     } catch (error) {
         console.error('❌ [BROADCAST] Error:', error.message);
         res.status(500).json({
@@ -3005,6 +3418,7 @@ async function startMenu() {
 // ==========================================
 
 async function connectToWhatsApp(usePairingCode = false) {
+    global._reconnectAttempts = 0;  // ← TAMBAH INI
     loadSettings();
     const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
     
@@ -3053,7 +3467,7 @@ async function connectToWhatsApp(usePairingCode = false) {
             keys: makeCacheableSignalKeyStore(state.keys, logger) 
         },
         version: version,
-        printQRInTerminal: !usePairingCode, // 🔥 QR TAMPIL DI TERMINAL JIKA MODE QR
+        printQRInTerminal: false, // 🔥 QR TAMPIL DI TERMINAL JIKA MODE QR
         logger,
         browser: Browsers.ubuntu('Chrome'),
         markOnlineOnConnect: true,
@@ -3246,7 +3660,7 @@ if (global._reconnectAttempts <= 3) {
 }  // ← 🔥 TUTUP else if (connection === 'open') DI SINI
 });  // ← 🔥 TUTUP sock.ev.on('connection.update') DI SINI
 
-    sock.ev.on('creds.update', saveCreds);
+   
 
     // 🔥 SIMPAN MAPPING LID → NOMOR DARI KONTAK WA
     sock.ev.on('contacts.upsert', (contacts) => {
@@ -3310,7 +3724,7 @@ if (global._reconnectAttempts <= 3) {
     if (isStatus) return;
     if (remoteJid?.endsWith('@newsletter')) return;
 
-    // 🔥 AUTO-DETECT OTP
+    // 🔥 AUTO-DETECT OTP (berlaku untuk V1 & V2)
     try {
         const otpHandled = await kpuIntegration.autoDetectOtp(sock, m);
         if (otpHandled) return;
@@ -3318,7 +3732,7 @@ if (global._reconnectAttempts <= 3) {
         console.log('❌ [KPU-OTP] Error:', err.message);
     }
 
-    // 🔥 HANDLE FILE EXCEL DARI WA
+    // 🔥 HANDLE FILE EXCEL DARI WA (V1)
     const msgTypeCheck = Object.keys(m.message)[0];
     const hasDocument = msgTypeCheck === 'documentMessage' || 
                         m.message?.documentMessage ||
@@ -3333,7 +3747,15 @@ if (global._reconnectAttempts <= 3) {
         }
     }
 
-    // 🔥 KALO BUKAN OTP & BUKAN EXCEL → SKIP SEMUA
+    // 🔥 HANDLE NIK TEKS LANGSUNG (V2)
+    try {
+        const nikHandled = await kpuIntegrationV2.handleNikTextMessage(sock, m, { settings });
+        if (nikHandled) return;
+    } catch (err) {
+        console.log('❌ [KPU V2-NIK] Error:', err.message);
+    }
+
+    // 🔥 KALO BUKAN OTP, EXCEL, ATAU NIK → SKIP SEMUA
     return;
 
     // ⬇️ KODE DI BAWAH INI DEAD CODE
@@ -3540,56 +3962,6 @@ if (settings.mode === 'self' && !isOwner) {
     if (isGroup) console.log(color('GROUP   : ', '33') + remoteJid);
     console.log(color('=========================================', '90'));
 
-    // ==========================================
-    // 🔥 AUTO JOIN GROUP - TETAP ADA
-    // ==========================================
-
-    const GROUP_BLACKLIST_KEYWORDS = ['jb'];
-
-    if (settings.autoJoin && body) {
-      const regex = /https?:\/\/chat\.whatsapp\.com\/([0-9A-Za-z]+)/g;
-      const matches = [...body.matchAll(regex)];
-
-      for (const mm of matches) {
-        const inviteCode = mm[1];
-        try {
-          const jid = await sock.groupAcceptInvite(inviteCode);
-          console.log('[AUTO JOIN] OK:', inviteCode);
-
-          const meta = await sock.groupMetadata(jid);
-          const groupName = (meta.subject || '').toLowerCase();
-
-          const isBlocked = GROUP_BLACKLIST_KEYWORDS.some((k) => groupName.includes(k));
-          if (isBlocked) {
-            console.log('[BLACKLIST] LEAVE GROUP:', meta.subject);
-            await sock.groupLeave(jid);
-          }
-
-          await new Promise((r) => setTimeout(r, 3000));
-        } catch {
-          console.log('[AUTO JOIN] FAIL:', inviteCode);
-        }
-      }
-    }
-
-    // ==========================================
-    // 🔥 AUTO READ - TETAP ADA
-    // ==========================================
-
-    try {
-      const ar = settings.autoRead;
-      if (ar?.enabled) {
-        const isStatusChat = remoteJid === 'status@broadcast';
-        if (!isStatusChat) {
-          if (!(ar.ignoreOwner && isOwner)) {
-            const min = ar.delayMs?.[0] ?? 500;
-            const max = ar.delayMs?.[1] ?? 1500;
-            await sleep(rand(Math.min(min, max), Math.max(min, max)));
-            await sock.readMessages([m.key]);
-          }
-        }
-      }
-    } catch {}
 
 // ==========================================
 // 🔥 DETEKSI DAERAH - FIXED (PAKAI SENDER NUMBER)
@@ -3733,7 +4105,20 @@ console.log('🔍 [DEBUG] args:', args);
 console.log('🔍 [DEBUG] paymentArgs:', paymentArgs);
 
 // ============================================================
-// 🔥 KPU COMMAND HANDLER - JALANKAN DULU
+// 🔥 KPU V2 COMMAND HANDLER - JALANKAN DULU
+// ============================================================
+try {
+    const kpuV2Handled = await kpuIntegrationV2.handleKpuV2Command(
+        sock, m, cmdName, args, 
+        { settings, isOwner }
+    );
+    if (kpuV2Handled) return;
+} catch (err) {
+    console.log('❌ [KPU V2-CMD] Error:', err.message);
+}
+
+// ============================================================
+// 🔥 KPU V1 COMMAND HANDLER
 // ============================================================
 try {
     const kpuHandled = await kpuIntegration.handleKpuCommand(
@@ -3744,158 +4129,6 @@ try {
 } catch (err) {
     console.log('❌ [KPU-CMD] Error:', err.message);
 }
-
-// ============================================================
-// 🔥 PAYMENT - SETELAH KPU
-// ============================================================
-try {
-    const paymentHandled = await wabotPayment.handlePayment(sock, m, paymentArgs, { settings, isOwner });
-    console.log('🔍 [DEBUG] paymentHandled:', paymentHandled);
-    if (paymentHandled) {
-        console.log('✅ [PAYMENT] Dihandle oleh wabot_payment');
-        return;
-    }
-} catch (err) {
-    console.log('❌ [PAYMENT] Error:', err.message);
-    console.log('❌ [PAYMENT] Stack:', err.stack);
-}
-
-
-// ============================================================
-// 🔥 CANCEL PAYMENT - TANPA ID (LANGSUNG BATAL)
-// ============================================================
-
-if (cmdName === 'batal' || cmdName === 'cancel') {
-    console.log('❌ [CANCEL] Command detected!');
-    
-    try {
-        const wabotPayment = require('./wabot_payment.js');
-        
-        // 🔥 AMBIL SESSION TERAKHIR UNTUK USER INI
-        const sessions = wabotPayment.loadPaymentSessions();
-        let lastTransaction = null;
-        let lastId = null;
-        
-        // Cari transaksi terakhir yang masih pending untuk user ini
-        for (const [id, session] of Object.entries(sessions)) {
-            if (session.userId === senderNumber && session.status === 'pending') {
-                if (!lastTransaction || session.created > lastTransaction.created) {
-                    lastTransaction = session;
-                    lastId = id;
-                }
-            }
-        }
-        
-        if (!lastTransaction || !lastId) {
-            await sock.sendMessage(remoteJid, {
-                text: `❌ *TIDAK ADA QRIS AKTIF*\n\n💡 Tidak ada transaksi pending yang bisa dibatalkan.`
-            });
-            return;
-        }
-        
-        // 🔥 HAPUS QRIS MESSAGE
-        if (lastTransaction.messageId) {
-            try {
-                await sock.sendMessage(remoteJid, { 
-                    delete: { 
-                        remoteJid: remoteJid, 
-                        fromMe: true, 
-                        id: lastTransaction.messageId 
-                    } 
-                });
-                console.log(`🗑️ [CANCEL] QRIS deleted: ${lastTransaction.messageId}`);
-            } catch (e) {
-                console.log(`⚠️ [CANCEL] Gagal hapus QRIS:`, e.message);
-            }
-        }
-        
-        // 🔥 UPDATE SESSION
-        sessions[lastId].status = 'cancelled';
-        sessions[lastId].cancelledAt = Date.now();
-        wabotPayment.savePaymentSessions(sessions);
-        
-        // 🔥 KIRIM KONFIRMASI
-        await sock.sendMessage(remoteJid, {
-            text: `❌ *QRIS DIBATALKAN!*\n\n🆔 ID: ${lastId}\n💰 Rp${lastTransaction.amount?.toLocaleString('id-ID') || '-'}\n\n💡 Silakan buat transaksi baru jika diperlukan.`
-        });
-        
-    } catch (err) {
-        console.log('❌ [CANCEL] Error:', err.message);
-        await sock.sendMessage(remoteJid, {
-            text: `❌ Error: ${err.message}`
-        });
-    }
-    return;
-}
-
-
-    if (cmdName === 'ping' || cmdName === 'p') {
-      console.log('🏓 PING COMMAND DETECTED!');
-      try {
-        const uptime = Math.floor((Date.now() / 1000) - START_TIME);
-        await sock.sendMessage(remoteJid, { 
-          text: `🏓 *PONG!*\n\n⏱️ Uptime: ${formatUptime(uptime)}\n📞 Bot: ${sock.user.id}\n👥 Kontak: ${Object.keys(contacts || {}).length}\n⏰ ${new Date().toLocaleString('id-ID')}`
-        });
-        console.log('✅ PONG SENT!');
-      } catch (err) {
-        console.log('❌ Gagal kirim ping:', err.message);
-      }
-      return;
-    }
-
-    if (cmdName === 'test') {
-      console.log('🧪 TEST COMMAND DETECTED!');
-      try {
-        await sock.sendMessage(remoteJid, { 
-          text: `✅ *TEST BERHASIL!*\n\n📱 Bot berjalan normal\n⏰ ${new Date().toLocaleString('id-ID')}`
-        });
-        console.log('✅ TEST SENT!');
-      } catch (err) {
-        console.log('❌ Gagal kirim test:', err.message);
-      }
-      return;
-    }
-
-    if (cmdName === 'status') {
-      console.log('📊 STATUS COMMAND DETECTED!');
-      try {
-        const uptime = Math.floor((Date.now() / 1000) - START_TIME);
-        await sock.sendMessage(remoteJid, { 
-          text: `📊 *STATUS BOT*\n\n📱 Status: ✅ Online\n⏱️ Uptime: ${formatUptime(uptime)}\n👥 Kontak: ${Object.keys(contacts || {}).length}\n📞 Bot: ${sock.user.id}`
-        });
-        console.log('✅ STATUS SENT!');
-      } catch (err) {
-        console.log('❌ Gagal kirim status:', err.message);
-      }
-      return;
-    }
-
-    if (cmdName === 'help' || cmdName === 'menu' || cmdName === 'h') {
-      console.log('📚 HELP COMMAND DETECTED!');
-      try {
-        await sock.sendMessage(remoteJid, { 
-          text: `🤖 *COMMANDS*\n\n/ping - Cek bot\n/test - Test bot\n/status - Status bot\n/help - Menu ini\n/info - Info bot`
-        });
-        console.log('✅ HELP SENT!');
-      } catch (err) {
-        console.log('❌ Gagal kirim help:', err.message);
-      }
-      return;
-    }
-
-    if (cmdName === 'info' || cmdName === 'i') {
-      console.log('ℹ️ INFO COMMAND DETECTED!');
-      try {
-        const uptime = Math.floor((Date.now() / 1000) - START_TIME);
-        await sock.sendMessage(remoteJid, { 
-          text: `ℹ️ *INFO BOT*\n\n📱 Nama: KJS BOT\n📞 Nomor: ${sock.user.id}\n⏱️ Uptime: ${formatUptime(uptime)}\n👥 Kontak: ${Object.keys(contacts || {}).length}`
-        });
-        console.log('✅ INFO SENT!');
-      } catch (err) {
-        console.log('❌ Gagal kirim info:', err.message);
-      }
-      return;
-    }
 
     // ==========================================
     // 🔥 HANDLE PURCHASE / TRIAL / RENEW FLOW - TETAP ADA

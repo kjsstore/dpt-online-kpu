@@ -1,5 +1,6 @@
 // ==========================================
-// 🔥 KPU CHECKER - TURBO MODE (SUPER CEPAT)
+// 🔥 KPU CHECKER - FINAL FIXED (CLEAN & AKURAT)
+// Flow: NIK → Langkah 2/4 → HP → Langkah 3/4 → OTP → Hasil
 // ==========================================
 
 const { chromium } = require('playwright');
@@ -11,22 +12,22 @@ const KPU_URL = 'https://cekdptonline.kpu.go.id/';
 const DEFAULT_PHONE = '083830803474';
 const RESULT_FILE = path.join(__dirname, 'hasil_cek_dpt.json');
 const SCREENSHOT_DIR = path.join(__dirname, 'screenshots');
-
-// ==========================================
-// 🔥 BACA NOMOR BOT DARI FILE (HASIL PAIRING)
-// ==========================================
-
 const NOMOR_BOT_FILE = path.join(__dirname, 'nomor_bot.json');
 
+// ==========================================
+// 🔥 BACA NOMOR BOT DARI FILE (LANGSUNG FORMAT 62)
+// ==========================================
 function getPhoneNumberFromFile() {
     try {
         if (fs.existsSync(NOMOR_BOT_FILE)) {
             const data = JSON.parse(fs.readFileSync(NOMOR_BOT_FILE, 'utf8'));
             if (data.phone) {
                 let clean = String(data.phone).replace(/[^0-9]/g, '');
-                // Normalisasi ke format 0 di depan
-                if (clean.startsWith('62')) {
-                    clean = '0' + clean.substring(2);
+                // 🔥 Normalisasi LANGSUNG ke format 62 (bukan 08)
+                if (clean.startsWith('0')) {
+                    clean = '62' + clean.substring(1);
+                } else if (!clean.startsWith('62')) {
+                    clean = '62' + clean;
                 }
                 console.log(`📱 [KPU] Nomor bot dari file: ${clean}`);
                 return clean;
@@ -49,42 +50,46 @@ if (!fs.existsSync(SCREENSHOT_DIR)) {
 const CONFIG = {
     headless: true,
     slowMo: 0,
-    timeout: 15000,
+    timeout: 30000,
     otpTimeout: 180000,
-    phoneNumber: getActivePhone(),  
+    phoneNumber: DEFAULT_PHONE,
     screenshotOnError: true,
 };
 
 // ==========================================
-// 🔥 DETEKSI HALAMAN "DATA BELUM TERDAFTAR"
+// 🔥 KEYWORD DETEKSI NOT-REGISTERED (SPESIFIK SAJA)
 // ==========================================
-
 const NOT_REGISTERED_KEYWORDS = [
     'data anda belum terdaftar',
-    'belum terdaftar',
-    'hubungi pantarlih',
-    'data anda belum',
+    'nik anda belum terdaftar',
+    'anda belum terdaftar',
+    'tidak terdaftar dalam dpt',
 ];
 
-const NOT_REGISTERED_PAGE_TIMEOUT = 3000;  // 🔥 3s (dari 8s)
+const NOT_REGISTERED_PAGE_TIMEOUT = 8000;
 
 // ==========================================
-// 🔥 STATE (OTP + TIMESTAMP)
+// 🔥 STATE
 // ==========================================
-
 let globalOtp = null;
 let globalOtpTime = null;
 let otpResolver = null;
 let browserInstance = null;
 let pageInstance = null;
 
+let isProcessing = false;
+let isWaitingForOtp = false;
+
 const OTP_MAX_AGE_MS = 120000;
 
 // ==========================================
 // 🔥 OTP DARI LUAR
 // ==========================================
-
 function submitOtp(otpCode) {
+    if (!isWaitingForOtp) {
+        console.log(`⚠️ [OTP] Gak ada yang nunggu OTP, skip: ${otpCode}`);
+        return false;
+    }
     console.log(`🔐 [OTP] Menerima OTP: ${otpCode}`);
     globalOtp = otpCode;
     globalOtpTime = Date.now();
@@ -92,13 +97,13 @@ function submitOtp(otpCode) {
         otpResolver(otpCode);
         otpResolver = null;
     }
+    isWaitingForOtp = false;
     return true;
 }
 
 // ==========================================
 // 🔥 BACA EXCEL
 // ==========================================
-
 function readNikFromExcel(filePath) {
     console.log(`📂 [EXCEL] Membaca file: ${filePath}`);
     if (!fs.existsSync(filePath)) throw new Error(`File tidak ditemukan: ${filePath}`);
@@ -127,7 +132,6 @@ function readNikFromExcel(filePath) {
 // ==========================================
 // 🔥 INIT BROWSER
 // ==========================================
-
 async function initBrowser() {
     console.log('🌐 [BROWSER] Membuka browser...');
 
@@ -172,7 +176,6 @@ async function closeBrowser() {
 // ==========================================
 // 🔥 SCREENSHOT
 // ==========================================
-
 async function takeScreenshot(name) {
     if (!pageInstance) return;
     try {
@@ -188,7 +191,6 @@ async function takeScreenshot(name) {
 // ==========================================
 // 🔥 WAIT OTP
 // ==========================================
-
 function waitForOtp(timeout = CONFIG.otpTimeout) {
     return new Promise((resolve, reject) => {
         if (globalOtp) {
@@ -206,8 +208,10 @@ function waitForOtp(timeout = CONFIG.otpTimeout) {
             }
         }
 
+        isWaitingForOtp = true;
         const timer = setTimeout(() => {
             otpResolver = null;
+            isWaitingForOtp = false;
             reject(new Error('Timeout menunggu OTP'));
         }, timeout);
 
@@ -215,16 +219,16 @@ function waitForOtp(timeout = CONFIG.otpTimeout) {
             clearTimeout(timer);
             globalOtp = null;
             globalOtpTime = null;
+            isWaitingForOtp = false;
             resolve(code);
         };
     });
 }
 
 // ==========================================
-// 🔥 FIND VISIBLE (POLLING 30ms)
+// 🔥 HELPER: Cari element visible
 // ==========================================
-
-async function findVisible(selector, timeout = 3000) {
+async function findVisible(selector, timeout = 5000) {
     const start = Date.now();
     while (Date.now() - start < timeout) {
         try {
@@ -234,7 +238,7 @@ async function findVisible(selector, timeout = 3000) {
                 if (visible) return el;
             }
         } catch (e) {}
-        await pageInstance.waitForTimeout(30);   // 🔥 30ms polling
+        await pageInstance.waitForTimeout(50);
     }
     return null;
 }
@@ -242,7 +246,6 @@ async function findVisible(selector, timeout = 3000) {
 // ==========================================
 // 🔥 FAST FILL
 // ==========================================
-
 async function fillFast(element, value) {
     try {
         await element.fill('');
@@ -266,22 +269,148 @@ async function fillFast(element, value) {
 }
 
 // ==========================================
-// 🔥 CEK HALAMAN "BELUM TERDAFTAR" (EVALUATE LANGSUNG)
+// 🔥 CEK FIELD OTP VISIBLE (SPESIFIK)
 // ==========================================
-
-async function isNotRegisteredPage() {
+async function isOtpFieldVisible() {
     try {
-        const hasKeyword = await pageInstance.evaluate((keywords) => {
+        const check = await pageInstance.evaluate(() => {
             const t = (document.body.innerText || '').toLowerCase();
-            return keywords.some(k => t.includes(k));
-        }, NOT_REGISTERED_KEYWORDS).catch(() => false);
 
-        if (hasKeyword) {
-            console.log(`🔍 [NOT-REG] Terdeteksi halaman "belum terdaftar"`);
+            // Kalau ada heading "Nomor HP" → ini halaman HP, bukan OTP
+            if (t.includes('nomor hp') || t.includes('nomor whatsapp')) {
+                return { isOtp: false, reason: 'masih di halaman Nomor HP' };
+            }
+
+            // Harus ada heading SPESIFIK halaman OTP
+            const hasOtpHeading =
+                t.includes('otp (one time password)') ||
+                t.includes('masukan kode yang terkirim') ||
+                t.includes('kode verifikasi') ||
+                t.includes('request kode baru');
+
+            if (!hasOtpHeading) {
+                return { isOtp: false, reason: 'heading OTP spesifik tidak ada' };
+            }
+
+            return { isOtp: true, reason: 'heading OTP spesifik ditemukan' };
+        });
+
+        if (!check.isOtp) {
+            console.log(`🔍 [OTP-FIELD] Skip: ${check.reason}`);
+            return false;
+        }
+
+        console.log(`🔍 [OTP-FIELD] ${check.reason} — cek input OTP...`);
+
+        const inputs = await pageInstance.$$('input');
+        for (const inp of inputs) {
+            const isVis = await inp.isVisible().catch(() => false);
+            if (!isVis) continue;
+
+            const val = await inp.inputValue().catch(() => '');
+            if (val && (val.startsWith('08') || val.startsWith('62') || val.length >= 10)) continue;
+
+            const isDisabled = await inp.isDisabled().catch(() => false);
+            if (isDisabled) continue;
+
+            const isReadonly = await inp.getAttribute('readonly').catch(() => null);
+            if (isReadonly) continue;
+
+            const maxLen = await inp.getAttribute('maxlength').catch(() => '?');
+            const type = await inp.getAttribute('type').catch(() => '?');
+            console.log(`🔍 [OTP-FIELD] ✅ Ketemu input OTP: type="${type}", maxlength="${maxLen}"`);
             return true;
         }
+
+        console.log(`🔍 [OTP-FIELD] Heading OTP ada, tapi input gak ketemu`);
         return false;
+
     } catch (e) {
+        console.log(`⚠️ [OTP-FIELD] Error: ${e.message}`);
+        return false;
+    }
+}
+
+// ==========================================
+// 🔥 CEK FIELD HP VISIBLE (SPESIFIK)
+// ==========================================
+async function isPhoneFieldVisible() {
+    try {
+        const hasPhoneHeading = await pageInstance.evaluate(() => {
+            const t = (document.body.innerText || '').toLowerCase();
+            return t.includes('nomor hp') ||
+                   t.includes('nomor whatsapp') ||
+                   t.includes('kami akan mengirimkan otp');
+        });
+
+        if (hasPhoneHeading) {
+            console.log('🔍 [HP-FIELD] Heading "Nomor HP" terdeteksi di halaman');
+            const candidates = await pageInstance.$$('input');
+            for (const inp of candidates) {
+                const isVis = await inp.isVisible().catch(() => false);
+                if (!isVis) continue;
+                const type = await inp.getAttribute('type').catch(() => '');
+                const maxLen = await inp.getAttribute('maxlength').catch(() => '');
+                if (maxLen === '1') continue;
+                console.log(`🔍 [HP-FIELD] Ketemu input: type="${type}", maxlength="${maxLen}"`);
+                return inp;
+            }
+        }
+
+        const el = await pageInstance.$(
+            'input[type="text"], input[type="tel"], input[placeholder*="HP" i], input[placeholder*="Nomor" i], input[placeholder*="Whatsapp" i], input[name*="phone" i]'
+        );
+        if (el && await el.isVisible().catch(() => false)) return el;
+        return null;
+    } catch (e) {
+        return null;
+    }
+}
+
+// ==========================================
+// 🔥 CEK HALAMAN NOT-REGISTERED (DENGAN GUARD)
+// ==========================================
+async function isNotRegisteredPage() {
+    try {
+        if (await isOtpFieldVisible()) return false;
+
+        // 🔥 Guard: kalau ada heading "Nomor HP" → bukan not-registered
+        const onPhonePage = await pageInstance.evaluate(() => {
+            const t = (document.body.innerText || '').toLowerCase();
+            return t.includes('nomor hp') ||
+                   t.includes('nomor whatsapp') ||
+                   t.includes('kami akan mengirimkan otp');
+        }).catch(() => false);
+        if (onPhonePage) return false;
+
+        const result = await pageInstance.evaluate((keywords) => {
+            const allElements = document.querySelectorAll('body *');
+            for (const el of allElements) {
+                const tag = el.tagName.toLowerCase();
+                if (tag === 'script' || tag === 'style' || tag === 'noscript') continue;
+
+                const rect = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                if (rect.width === 0 || rect.height === 0) continue;
+                if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') continue;
+
+                const text = (el.innerText || '').toLowerCase().trim();
+                if (!text || text.length > 200) continue;
+
+                for (const kw of keywords) {
+                    if (text.includes(kw)) {
+                        return { notReg: true, reason: `keyword "${kw}" di <${tag}>` };
+                    }
+                }
+            }
+            return { notReg: false, reason: 'no visible keyword' };
+        }, NOT_REGISTERED_KEYWORDS);
+
+        if (result.notReg) console.log(`🔍 [NOT-REG] ✅ Terdeteksi: ${result.reason}`);
+        return result.notReg;
+
+    } catch (e) {
+        console.log(`⚠️ [NOT-REG] Error: ${e.message}`);
         return false;
     }
 }
@@ -289,10 +418,8 @@ async function isNotRegisteredPage() {
 async function waitForNotRegisteredPage(timeout = NOT_REGISTERED_PAGE_TIMEOUT) {
     const start = Date.now();
     while (Date.now() - start < timeout) {
-        if (await isNotRegisteredPage()) {
-            return true;
-        }
-        await pageInstance.waitForTimeout(100);
+        if (await isNotRegisteredPage()) return true;
+        await pageInstance.waitForTimeout(200);
     }
     return false;
 }
@@ -300,63 +427,50 @@ async function waitForNotRegisteredPage(timeout = NOT_REGISTERED_PAGE_TIMEOUT) {
 // ==========================================
 // 🔥 PARSE HASIL DPT
 // ==========================================
-
 function parseDptResult(rawText) {
-    const out = {
-        nama: '-',
-        status: '-',
-        wilayah: '-',
-        tanggal: '-',
-        validasi: '-',
-    };
-
+    const out = { nama: '-', status: '-', wilayah: '-', tanggal: '-', validasi: '-' };
     if (!rawText) return out;
 
-    const text = String(rawText).replace(/\s+/g, ' ').trim();
+    const lines = String(rawText).split('\n').map(l => l.trim()).filter(Boolean);
+    const flat = String(rawText).replace(/\s+/g, ' ').trim();
 
-    let m = text.match(/Nama\s*[:\-]\s*([A-Z][A-Z\s.'-]{2,60}?)(?=\s*(?:Status|Wilayah|Tanggal|Pengecekan|$))/i);
-    if (m) out.nama = m[1].trim();
-
+    for (const line of lines) {
+        const m = line.match(/^Nama\s*[:\-]\s*(.+)$/i);
+        if (m) { out.nama = m[1].replace(/[,;]+$/, '').trim(); break; }
+    }
     if (out.nama === '-') {
-        m = text.match(/Selamat[,\s]+([A-Z][A-Z\s.'-]{2,60}?)(?=\s*(?:Anda|Status|Wilayah|$))/i);
-        if (m) out.nama = m[1].trim();
+        const m = flat.match(/Selamat[,\s]+(.+?)(?=\s*(?:Anda|Status|Wilayah|Tanggal|$))/i);
+        if (m) out.nama = m[1].replace(/[,;]+$/, '').trim();
     }
 
-    if (/tidak\s+terdaftar/i.test(text)) {
-        out.status = 'TIDAK TERDAFTAR';
-    } else if (/\bterdaftar\b/i.test(text)) {
-        out.status = 'TERDAFTAR';
+    if (/tidak\s+terdaftar/i.test(flat)) out.status = 'TIDAK TERDAFTAR';
+    else if (/\bterdaftar\b/i.test(flat)) out.status = 'TERDAFTAR';
+
+    for (const line of lines) {
+        const m = line.match(/^Wilayah\s*[:\-]\s*(.+)$/i);
+        if (m) { out.wilayah = m[1].replace(/\s*,\s*/g, ', ').trim(); break; }
     }
 
-    m = text.match(/Wilayah\s*[:\-]\s*(.+?)(?=\s*(?:Tanggal|Pengecekan|Status\s*Validasi|Data\s+Valid|$))/i);
-    if (m) {
-        out.wilayah = m[1].replace(/\s+/g, ' ').replace(/\s*,\s*/g, ', ').trim();
-    }
-
-    m = text.match(/(\d{1,2}\s+[A-Za-z]+\s+\d{4}\s+pukul\s+[\d:.]+\s+WIB)/i);
-    if (m) {
-        out.tanggal = m[1].trim();
-    } else {
-        m = text.match(/(\d{1,2}\s+[A-Za-z]+\s+\d{4})/);
+    let m = flat.match(/(\d{1,2}\s+[A-Za-z]+\s+\d{4}\s+pukul\s+[\d:.]+\s+WIB)/i);
+    if (m) out.tanggal = m[1].trim();
+    else {
+        m = flat.match(/(\d{1,2}\s+[A-Za-z]+\s+\d{4})/);
         if (m) out.tanggal = m[1].trim();
     }
 
-    if (/data\s+tidak\s+valid/i.test(text)) {
-        out.validasi = 'DATA TIDAK VALID';
-    } else if (/data\s+valid/i.test(text)) {
-        out.validasi = 'DATA VALID';
-    }
+    if (/data\s+tidak\s+valid/i.test(flat)) out.validasi = 'DATA TIDAK VALID';
+    else if (/data\s+valid/i.test(flat)) out.validasi = 'DATA VALID';
 
     return out;
 }
 
 // ==========================================
-// 🔥 CEK 1 NIK - TURBO MODE (OPTIMIZED)
+// 🔥 CEK 1 NIK - FLOW FINAL
 // ==========================================
-
 async function checkSingleNik(nik, phoneNumber = null) {
     if (!phoneNumber) phoneNumber = getActivePhone();
-    const MAX_RETRY = 3;  // 🔥 Coba 3x kalo OTP timeout
+
+    const MAX_RETRY = 3;
 
     for (let attempt = 1; attempt <= MAX_RETRY; attempt++) {
         console.log('\n' + '='.repeat(60));
@@ -364,186 +478,356 @@ async function checkSingleNik(nik, phoneNumber = null) {
         console.log('='.repeat(60));
 
         const result = {
-            nik,
-            phone: phoneNumber,
-            status: 'pending',
-            data: null,
-            error: null,
+            nik, phone: phoneNumber, status: 'pending',
+            data: null, error: null,
             timestamp: new Date().toISOString(),
         };
 
         try {
             // ==============================
-            // STEP 0: BUKA HALAMAN KPU
+            // STEP 0: BUKA KPU
             // ==============================
             console.log('🌐 [STEP 0] Buka halaman KPU...');
             try {
-                await pageInstance.goto(KPU_URL, {
-                    waitUntil: 'domcontentloaded',
-                    timeout: 15000,
-                });
+                await pageInstance.goto(KPU_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
             } catch (e) {
                 console.log(`⚠️ [STEP 0] goto warning: ${e.message}`);
             }
 
             const nikInput = await findVisible(
                 'textarea, input[type="text"], input[type="number"], input[placeholder*="NIK" i], input[name*="nik" i]',
-                5000
+                8000
             );
             if (!nikInput) throw new Error('Input NIK tidak ditemukan');
+
+            await takeScreenshot(`01_home_${nik}`);
             console.log('✅ [STEP 0] Halaman KPU siap');
 
             // ==============================
             // STEP 1: ISI NIK
             // ==============================
             console.log('📝 [STEP 1] Mengisi NIK...');
-            await fillFast(nikInput, nik);
+            await nikInput.click();
+            await nikInput.fill('');
+            await pageInstance.waitForTimeout(100);
+            await nikInput.type(nik, { delay: 30 });
+
+            const nikValue = await nikInput.inputValue().catch(() => '');
+            if (nikValue !== nik) {
+                console.log(`⚠️ [STEP 1] NIK belum sempurna (${nikValue}), fill ulang...`);
+                await fillFast(nikInput, nik);
+            }
+
             console.log(`✅ [STEP 1] NIK diisi: ${nik}`);
+            await pageInstance.waitForTimeout(500);
+            await takeScreenshot(`02_nik_${nik}`);
 
             // ==============================
-            // STEP 2: KLIK LANJUT
+            // STEP 1.5: TUNGGU TOMBOL ENABLE
             // ==============================
-            console.log('🔘 [STEP 2] Klik tombol lanjut...');
-            let nextButton = await findVisible(
-                'button:has-text("Langkah"), button:has-text("Lanjut"), button:has-text("Next"), button[type="submit"]',
-                3000
+            console.log('⏳ [STEP 1.5] Tunggu tombol "Langkah 2/4" aktif...');
+            let btnEnabled = false;
+            const waitBtnStart = Date.now();
+            while (Date.now() - waitBtnStart < 5000) {
+                const btn = await pageInstance.$('button:has-text("Langkah")');
+                if (btn) {
+                    const isDis = await btn.evaluate(el =>
+                        el.disabled ||
+                        el.hasAttribute('disabled') ||
+                        el.getAttribute('aria-disabled') === 'true' ||
+                        el.classList.contains('disabled') ||
+                        getComputedStyle(el).pointerEvents === 'none'
+                    ).catch(() => true);
+                    if (!isDis) { btnEnabled = true; break; }
+                }
+                await pageInstance.waitForTimeout(200);
+            }
+            console.log(btnEnabled ? '✅ [STEP 1.5] Tombol aktif' : '⚠️ [STEP 1.5] Tombol masih disabled');
+
+            // ==============================
+            // STEP 2: KLIK LANGKAH 2/4
+            // ==============================
+            console.log('🔘 [STEP 2] Klik tombol "Langkah 2 / 4"...');
+
+            let searchBtn = await findVisible(
+                'button:has-text("Langkah 2"), button:has-text("Langkah"), button:has-text("Pencarian"), button:has-text("Cari"), button:has-text("Lanjut"), button:has-text("Next"), button[type="submit"]',
+                5000
             );
-            if (!nextButton) throw new Error('Tombol lanjut tidak ditemukan');
-            await nextButton.click();
-            console.log('✅ [STEP 2] Tombol lanjut diklik');
+            if (!searchBtn) throw new Error('Tombol Langkah 2/4 tidak ditemukan');
+
+            await searchBtn.scrollIntoViewIfNeeded().catch(() => {});
+            await pageInstance.waitForTimeout(300);
 
             try {
-                await Promise.race([
-                    pageInstance.waitForSelector(
-                        'input[type="tel"], input[placeholder*="HP" i], input[placeholder*="Nomor" i], input[placeholder*="Whatsapp" i], input[name*="phone" i]',
-                        { timeout: 3000, state: 'visible' }
-                    ),
-                    pageInstance.waitForFunction(
-                        () => {
-                            const t = document.body.innerText.toLowerCase();
-                            return t.includes('belum terdaftar') || t.includes('data anda belum');
-                        },
-                        { timeout: 3000 }
-                    ),
-                ]);
+                await searchBtn.click({ timeout: 5000 });
+                console.log('✅ [STEP 2] Tombol "Langkah 2/4" diklik (1x saja)');
             } catch (e) {
-                console.log('⚠️ [STEP 2] Selector HP / not-registered belum muncul');
+                throw new Error(`Gagal klik tombol Langkah 2/4: ${e.message}`);
             }
 
-            const notRegisteredAfterNext = await isNotRegisteredPage();
-            if (notRegisteredAfterNext) {
+            await pageInstance.waitForTimeout(5000);
+
+            // Polling field HP / OTP / not-reg (20 detik)
+            let hpField = null;
+            let otpLangsungMuncul = false;
+            let notRegStep2 = false;
+
+            const step2Start = Date.now();
+            const STEP2_MAX = 20000;
+
+            while (Date.now() - step2Start < STEP2_MAX) {
+                hpField = await isPhoneFieldVisible();
+                if (hpField) break;
+                if (await isOtpFieldVisible()) { otpLangsungMuncul = true; break; }
+                if (await isNotRegisteredPage()) { notRegStep2 = true; break; }
+                await pageInstance.waitForTimeout(300);
+            }
+
+            await takeScreenshot(`03_after_next_${nik}`);
+
+            if (notRegStep2 && !hpField && !otpLangsungMuncul) {
                 console.log(`❌ [NOT-REG] NIK ${nik} TIDAK TERDAFTAR`);
+                await takeScreenshot(`not_registered_${nik}`);
                 result.status = 'not_registered';
                 result.data = {
-                    nama: '-',
-                    status: 'TIDAK TERDAFTAR',
-                    wilayah: '-',
-                    tanggal: '-',
-                    validasi: '-',
+                    nama: '-', status: 'TIDAK TERDAFTAR', wilayah: '-',
+                    tanggal: '-', validasi: '-',
                     raw_text: 'Data anda belum terdaftar!',
                     url: pageInstance.url(),
                 };
                 result.error = 'Data belum terdaftar di DPT';
-                return result;  // ✅ LANGSUNG RETURN, GA PERLU RETRY
+                return result;
+            }
+
+            if (!hpField && !otpLangsungMuncul) {
+                throw new Error('Field HP tidak muncul setelah klik Langkah 2/4 (timeout 20s)');
             }
 
             // ==============================
-            // STEP 3: ISI NOMOR HP
+            // STEP 3: ISI NOMOR HP (FORMAT 62)
             // ==============================
-            console.log('📱 [STEP 3] Mengisi nomor HP...');
-            let phoneInput = await findVisible(
-                'input[type="tel"], input[placeholder*="HP" i], input[placeholder*="Whatsapp" i], input[placeholder*="Nomor" i], input[name*="phone" i]',
-                3000
-            );
-            if (!phoneInput) {
-                phoneInput = await findVisible('input[type="text"], input[type="number"]', 1500);
-            }
-            if (!phoneInput) throw new Error('Input nomor HP tidak ditemukan');
+            if (hpField) {
+                console.log('📱 [STEP 3] Mengisi nomor HP...');
 
-            let formattedPhone = phoneNumber.replace(/[^0-9]/g, '');
-            if (formattedPhone.startsWith('0')) {
-                formattedPhone = '62' + formattedPhone.substring(1);
-            }
-
-            await fillFast(phoneInput, formattedPhone);
-            const filledValue = await phoneInput.inputValue().catch(() => '');
-            if (!filledValue || filledValue.length < 8) {
-                console.log(`⚠️ [STEP 3] Value belum masuk, type manual...`);
-                await phoneInput.click();
-                await phoneInput.type(formattedPhone, { delay: 5 });
-            }
-            console.log(`✅ [STEP 3] Nomor diisi: ${formattedPhone}`);
-
-            // ==============================
-            // STEP 4: KIRIM OTP
-            // ==============================
-            console.log('🔘 [STEP 4] Klik kirim OTP...');
-            let sendBtn = await findVisible(
-                'button:has-text("Kirim"), button:has-text("OTP"), button:has-text("Langkah"), button[type="submit"]',
-                3000
-            );
-            if (!sendBtn) throw new Error('Tombol kirim OTP tidak ditemukan');
-            await sendBtn.click();
-            console.log('✅ [STEP 4] OTP diminta, tunggu OTP masuk...');
-
-            // ==============================
-            // STEP 5: TUNGGU OTP
-            // ==============================
-            console.log('⏳ [STEP 5] Menunggu OTP dari KPU...');
-
-            const otpPromise = waitForOtp().catch(() => null);
-
-            const selectorPromise = pageInstance.waitForSelector(
-                'input[inputmode="numeric"], input[maxlength="1"], input[placeholder*="OTP" i]',
-                { timeout: 3000, state: 'visible' }
-            ).then(() => 'selector').catch(() => null);
-
-            const notRegPromise = pageInstance.waitForFunction(
-                () => {
-                    const t = document.body.innerText.toLowerCase();
-                    return t.includes('belum terdaftar') || t.includes('data anda belum');
-                },
-                { timeout: 3000 }
-            ).then(() => 'notreg').catch(() => null);
-
-            const winner = await Promise.race([otpPromise, selectorPromise, notRegPromise]);
-
-            if (winner === 'notreg' || await isNotRegisteredPage()) {
-                console.log(`❌ [NOT-REG] NIK ${nik} TIDAK TERDAFTAR`);
-                result.status = 'not_registered';
-                result.data = {
-                    nama: '-',
-                    status: 'TIDAK TERDAFTAR',
-                    wilayah: '-',
-                    tanggal: '-',
-                    validasi: '-',
-                    raw_text: 'Data anda belum terdaftar!',
-                    url: pageInstance.url(),
-                };
-                result.error = 'Data belum terdaftar di DPT';
-                return result;  // ✅ LANGSUNG RETURN
-            }
-
-            // 🔥 AMBIL OTP — kalo belum dapet dari race, tunggu max 60 detik
-            let otpCode = await otpPromise;
-
-            if (!otpCode) {
-                console.log('⏳ [STEP 5] OTP belum masuk, tunggu max 60 detik...');
-                try {
-                    otpCode = await waitForOtp(60000);
-                } catch (e) {
-                    console.log(`⚠️ [STEP 5] Timeout 60s nunggu OTP — RETRY dari awal...`);
-                    
-                    // 🔥 KALO MASIH ADA PERCOBAAN, RETRY
-                    if (attempt < MAX_RETRY) {
-                        console.log(`🔄 [RETRY] Percobaan ${attempt} gagal, ulang dari awal (${attempt + 1}/${MAX_RETRY})...`);
-                        await pageInstance.waitForTimeout(2000);  // jeda 2 detik
-                        continue;  // 🔥 LANJUT KE PERCOBAAN BERIKUTNYA
-                    }
-                    
-                    // 🔥 KALO UDAH MAX, BARU ERROR
-                    throw new Error('OTP_TIMEOUT: KPU ga kirim OTP setelah 3 percobaan');
+                let formattedPhone = phoneNumber.replace(/[^0-9]/g, '');
+                if (formattedPhone.startsWith('0')) {
+                    formattedPhone = '62' + formattedPhone.substring(1);
                 }
+                if (!formattedPhone.startsWith('62')) {
+                    formattedPhone = '62' + formattedPhone;
+                }
+
+                console.log(`📱 [STEP 3] Format nomor: ${formattedPhone}`);
+
+                await hpField.click();
+                await pageInstance.waitForTimeout(300);
+                await hpField.fill('');
+                await pageInstance.waitForTimeout(300);
+                await hpField.type(formattedPhone, { delay: 80 });
+                await pageInstance.waitForTimeout(2000);
+
+                const filledValue = await hpField.inputValue().catch(() => '');
+                console.log(`🔍 [STEP 3] Value terisi: "${filledValue}"`);
+
+                if (filledValue !== formattedPhone) {
+                    console.log(`⚠️ [STEP 3] Value beda, coba fill ulang...`);
+                    await hpField.fill('');
+                    await pageInstance.waitForTimeout(200);
+                    await hpField.type(formattedPhone, { delay: 80 });
+                    await pageInstance.waitForTimeout(1000);
+                }
+
+                console.log(`✅ [STEP 3] Nomor diisi: ${formattedPhone}`);
+                await takeScreenshot(`04_phone_${nik}`);
+
+                console.log('⏳ [STEP 3.5] Tunggu 1s sebelum klik Langkah 3/4...');
+                await pageInstance.waitForTimeout(1000);
+
+                // ==============================
+                // STEP 4: KLIK LANGKAH 3/4
+                // ==============================
+                console.log('🔘 [STEP 4] Klik tombol "Langkah 3/4"...');
+
+                async function findStep3Button(timeout = 8000) {
+                    const start = Date.now();
+                    while (Date.now() - start < timeout) {
+                        const buttons = await pageInstance.$$('button');
+                        for (const btn of buttons) {
+                            const visible = await btn.isVisible().catch(() => false);
+                            if (!visible) continue;
+
+                            const text = (await btn.textContent().catch(() => '')).trim();
+                            if (/langkah\s*3\s*\/\s*4/i.test(text)) {
+                                console.log(`🔍 [STEP 4] Ketemu tombol: "${text}"`);
+                                return btn;
+                            }
+                        }
+                        await pageInstance.waitForTimeout(200);
+                    }
+                    return null;
+                }
+
+                let nextBtn = await findStep3Button(5000);
+
+                if (!nextBtn) {
+                    console.log('⚠️ [STEP 4] Tombol "Langkah 3/4" gak ketemu, coba alternatif...');
+                    nextBtn = await findVisible(
+                        'button:has-text("Kirim OTP"), button:has-text("Kirim"), button:has-text("Verifikasi"), button:has-text("Next")',
+                        3000
+                    );
+                }
+
+                if (!nextBtn) {
+                    await takeScreenshot(`04_no_button_${nik}`);
+                    throw new Error('Tombol Langkah 3/4 tidak ditemukan');
+                }
+
+                console.log('⏳ [STEP 4] Nunggu tombol enabled...');
+                const enableStart = Date.now();
+                let btnReady = false;
+
+                while (Date.now() - enableStart < 10000) {
+                    const state = await nextBtn.evaluate(el => {
+                        const style = getComputedStyle(el);
+                        return {
+                            disabled: el.disabled,
+                            hasDisabledAttr: el.hasAttribute('disabled'),
+                            ariaDisabled: el.getAttribute('aria-disabled'),
+                            pointerEvents: style.pointerEvents,
+                            opacity: style.opacity,
+                        };
+                    }).catch(() => null);
+
+                    if (state) {
+                        const isBlocked =
+                            state.disabled ||
+                            state.hasDisabledAttr ||
+                            state.ariaDisabled === 'true' ||
+                            state.pointerEvents === 'none' ||
+                            parseFloat(state.opacity) < 0.5;
+
+                        if (!isBlocked) {
+                            btnReady = true;
+                            console.log('✅ [STEP 4] Tombol siap diklik');
+                            break;
+                        }
+                    }
+                    await pageInstance.waitForTimeout(300);
+                }
+
+                if (!btnReady) {
+                    console.log('⚠️ [STEP 4] Tombol masih ke-block setelah 10s — coba paksa klik');
+                    await takeScreenshot(`04c_btn_blocked_${nik}`);
+                }
+
+                await nextBtn.scrollIntoViewIfNeeded().catch(() => {});
+                await pageInstance.waitForTimeout(300);
+
+                let clickSuccess = false;
+
+                try {
+                    await nextBtn.click({ timeout: 5000 });
+                    clickSuccess = true;
+                    console.log('✅ [STEP 4] Klik normal berhasil');
+                } catch (e) {
+                    console.log(`⚠️ [STEP 4] Click normal gagal: ${e.message}`);
+                }
+
+                if (!clickSuccess) {
+                    try {
+                        await nextBtn.click({ force: true, timeout: 3000 });
+                        clickSuccess = true;
+                        console.log('✅ [STEP 4] Klik force berhasil');
+                    } catch (e) {
+                        console.log(`⚠️ [STEP 4] Click force gagal: ${e.message}`);
+                    }
+                }
+
+                if (!clickSuccess) {
+                    try {
+                        await nextBtn.evaluate(el => {
+                            el.scrollIntoView({ block: 'center' });
+                            el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                        });
+                        clickSuccess = true;
+                        console.log('✅ [STEP 4] Klik via dispatchEvent berhasil');
+                    } catch (e) {
+                        console.log(`⚠️ [STEP 4] dispatchEvent gagal: ${e.message}`);
+                    }
+                }
+
+                if (!clickSuccess) {
+                    console.log('⚠️ [STEP 4] Semua klik gagal — coba tekan Enter di field HP...');
+                    try {
+                        await hpField.focus();
+                        await pageInstance.keyboard.press('Enter');
+                        clickSuccess = true;
+                        console.log('✅ [STEP 4] Enter berhasil');
+                    } catch (e) {
+                        console.log(`⚠️ [STEP 4] Enter gagal: ${e.message}`);
+                    }
+                }
+
+                if (!clickSuccess) {
+                    await takeScreenshot(`04_click_failed_${nik}`);
+                    throw new Error('Semua metode klik tombol Langkah 3/4 gagal');
+                }
+
+                console.log('⏳ [STEP 4.5] Tunggu 8s cek hasil...');
+                await pageInstance.waitForTimeout(8000);
+                await takeScreenshot(`04b_after_click_${nik}`);
+
+            } else {
+                console.log('✅ [STEP 3-4] Skip ke halaman OTP langsung');
+            }
+
+            // ==============================
+            // STEP 5: TUNGGU FIELD OTP MUNCUL
+            // ==============================
+            console.log('⏳ [STEP 5] Menunggu field OTP dari KPU...');
+
+            let otpFieldMuncul = false;
+            let notRegMuncul = false;
+            const step5Start = Date.now();
+
+            while (Date.now() - step5Start < 15000) {
+                if (await isOtpFieldVisible()) { otpFieldMuncul = true; break; }
+                if (await isNotRegisteredPage()) { notRegMuncul = true; break; }
+                await pageInstance.waitForTimeout(300);
+            }
+
+            await takeScreenshot(`05_otp_page_${nik}`);
+
+            if (notRegMuncul && !otpFieldMuncul) {
+                console.log(`❌ [NOT-REG] NIK ${nik} TIDAK TERDAFTAR`);
+                await takeScreenshot(`not_registered_${nik}`);
+                result.status = 'not_registered';
+                result.data = {
+                    nama: '-', status: 'TIDAK TERDAFTAR', wilayah: '-',
+                    tanggal: '-', validasi: '-',
+                    raw_text: 'Data anda belum terdaftar!',
+                    url: pageInstance.url(),
+                };
+                result.error = 'Data belum terdaftar di DPT';
+                return result;
+            }
+
+            if (!otpFieldMuncul) {
+                throw new Error('Field OTP tidak muncul setelah kirim OTP (timeout 15s)');
+            }
+
+            console.log('✅ [STEP 5] Field OTP muncul — menunggu OTP dari user...');
+            let otpCode = null;
+            try {
+                otpCode = await waitForOtp();
+            } catch (e) {
+                console.log(`⚠️ [STEP 5] Timeout nunggu OTP — RETRY dari awal...`);
+                if (attempt < MAX_RETRY) {
+                    console.log(`🔄 [RETRY] Percobaan ${attempt} gagal, ulang (${attempt + 1}/${MAX_RETRY})...`);
+                    await pageInstance.waitForTimeout(2000);
+                    continue;
+                }
+                throw new Error('OTP_TIMEOUT: KPU ga kirim OTP setelah 3 percobaan');
             }
 
             console.log(`✅ [STEP 5] OTP diterima: ${otpCode}`);
@@ -552,58 +836,75 @@ async function checkSingleNik(nik, phoneNumber = null) {
             // STEP 6: ISI OTP
             // ==============================
             console.log('🔐 [STEP 6] Mengisi OTP...');
-            const otpInputs = await pageInstance.$$('input[type="text"], input[type="number"], input[inputmode="numeric"], input[maxlength="1"]');
+            await pageInstance.waitForTimeout(500);
+
+            const otpInputs = await pageInstance.$$('input');
             const visibleOtp = [];
             for (const inp of otpInputs) {
-                if (await inp.isVisible().catch(() => false)) {
-                    visibleOtp.push(inp);
-                }
+                if (!await inp.isVisible().catch(() => false)) continue;
+
+                const val = await inp.inputValue().catch(() => '');
+                if (val && (val.startsWith('08') || val.startsWith('62') || val.length >= 10)) continue;
+
+                const isDisabled = await inp.isDisabled().catch(() => false);
+                if (isDisabled) continue;
+
+                visibleOtp.push(inp);
             }
             console.log(`🔍 [STEP 6] Ditemukan ${visibleOtp.length} input OTP visible`);
 
             if (visibleOtp.length >= 6) {
-                console.log('📝 [STEP 6] Format: 6 input terpisah — isi PARALEL');
+                console.log('📝 [STEP 6] Format: 6 input terpisah');
                 const digits = otpCode.split('');
-                await Promise.all([
-                    fillFast(visibleOtp[0], digits[0] || ''),
-                    fillFast(visibleOtp[1], digits[1] || ''),
-                    fillFast(visibleOtp[2], digits[2] || ''),
-                    fillFast(visibleOtp[3], digits[3] || ''),
-                    fillFast(visibleOtp[4], digits[4] || ''),
-                    fillFast(visibleOtp[5], digits[5] || ''),
-                ]);
+                for (let i = 0; i < 6; i++) {
+                    await fillFast(visibleOtp[i], digits[i] || '');
+                    await pageInstance.waitForTimeout(50);
+                }
                 await visibleOtp[5].focus().catch(() => {});
+
             } else if (visibleOtp.length >= 1) {
                 console.log('📝 [STEP 6] Format: 1 input gabungan');
                 const target = visibleOtp[visibleOtp.length - 1];
-                await fillFast(target, otpCode);
+
+                await target.click();
+                await pageInstance.waitForTimeout(100);
+                await target.fill('').catch(() => {});
+                await pageInstance.waitForTimeout(100);
+                await target.type(otpCode, { delay: 50 });
+
                 const filled = await target.inputValue().catch(() => '');
                 if (filled.length < otpCode.length) {
-                    console.log(`⚠️ [STEP 6] OTP belum penuh, type manual...`);
-                    await target.click();
-                    await target.type(otpCode, { delay: 5 });
+                    console.log(`⚠️ [STEP 6] OTP belum penuh (${filled}), coba fill ulang...`);
+                    await fillFast(target, otpCode);
                 }
+                console.log(`✅ [STEP 6] OTP diisi: ${await target.inputValue().catch(() => '?')}`);
             } else {
                 throw new Error('Input OTP tidak ditemukan');
             }
+
             console.log('✅ [STEP 6] OTP diisi');
+            await pageInstance.waitForTimeout(500);
+            await takeScreenshot(`06_otp_filled_${nik}`);
 
             // ==============================
             // STEP 7: SUBMIT OTP
             // ==============================
             console.log('🔘 [STEP 7] Submit OTP...');
-            let submitBtn = await findVisible('button:has-text("Konfirmasi")', 2000);
+
+            let submitBtn = await findVisible('button:has-text("Konfirmasi")', 3000);
             if (!submitBtn) {
                 console.log('⚠️ [STEP 7] Cari tombol alternatif...');
                 submitBtn = await findVisible(
                     'button:has-text("Verifikasi"), button:has-text("Submit"), button:has-text("Kirim"), button:has-text("Langkah"), button[type="submit"]',
-                    2000
+                    3000
                 );
             }
+
             if (submitBtn) {
                 const btnText = await submitBtn.textContent().catch(() => '?');
                 console.log(`✅ [STEP 7] Klik tombol: "${btnText}"`);
-                await submitBtn.click();
+                await submitBtn.click({ timeout: 5000 });
+                console.log('✅ [STEP 7] Tombol submit diklik (1x saja)');
             } else {
                 console.log('⚠️ [STEP 7] Tidak ada tombol, coba Enter');
                 await pageInstance.keyboard.press('Enter');
@@ -620,12 +921,15 @@ async function checkSingleNik(nik, phoneNumber = null) {
                         return (t.includes('Nama') && t.includes('Status')) ||
                                t.toLowerCase().includes('belum terdaftar');
                     },
-                    { timeout: 10000, polling: 100 }
+                    { timeout: 20000, polling: 150 }
                 );
                 console.log('✅ [STEP 7.5] Halaman hasil muncul');
             } catch (e) {
                 console.log('⚠️ [STEP 7.5] Timeout, baca apa adanya');
             }
+
+            await pageInstance.waitForTimeout(1000);
+            await takeScreenshot(`07_result_${nik}`);
 
             // ==============================
             // STEP 8: AMBIL HASIL
@@ -640,14 +944,12 @@ async function checkSingleNik(nik, phoneNumber = null) {
                 console.log('❌ [STEP 8] MASIH DI HALAMAN OTP!');
                 result.status = 'failed';
                 result.error = 'OTP gagal dimasukkan atau OTP salah/expired';
-                result.data = {
-                    raw_text: pageText.substring(0, 5000),
-                    url: pageInstance.url(),
-                };
+                result.data = { raw_text: pageText.substring(0, 5000), url: pageInstance.url() };
                 return result;
             }
 
-            console.log(`📄 [STEP 8] Preview (500 char):\n${pageText.substring(0, 500)}`);
+            console.log(`📄 [STEP 8] Preview:\n${pageText.substring(0, 500)}`);
+
             const parsed = parseDptResult(pageText);
             console.log(`📊 [STEP 8] Hasil parse:`, JSON.stringify(parsed, null, 2));
 
@@ -658,86 +960,83 @@ async function checkSingleNik(nik, phoneNumber = null) {
                               pageText.length > 50;
 
             result.status = isSuccess ? 'success' : 'failed';
-            result.data = {
-                ...parsed,
-                raw_text: pageText.substring(0, 5000),
-                url: pageInstance.url(),
-            };
-            console.log(`📊 [STEP 8] Status: ${result.status}`);
+            result.data = { ...parsed, raw_text: pageText.substring(0, 5000), url: pageInstance.url() };
 
-            // 🔥 SUKSES → RETURN
+            console.log(`📊 [STEP 8] Status: ${result.status}`);
             return result;
 
         } catch (error) {
             console.error(`❌ [CHECK] Error NIK ${nik} (percobaan ${attempt}):`, error.message);
-            
-            // 🔥 KALO MASIH ADA PERCOBAAN, RETRY
+
             if (attempt < MAX_RETRY) {
-                console.log(`🔄 [RETRY] Percobaan ${attempt} gagal, ulang dari awal (${attempt + 1}/${MAX_RETRY})...`);
+                console.log(`🔄 [RETRY] Percobaan ${attempt} gagal, ulang (${attempt + 1}/${MAX_RETRY})...`);
                 await pageInstance.waitForTimeout(2000);
                 continue;
             }
-            
-            // 🔥 KALO UDAH MAX, BARU ERROR
+
             result.status = 'error';
             result.error = error.message;
             if (CONFIG.screenshotOnError) await takeScreenshot(`error_${nik}`);
         }
     }
 
-    // 🔥 KALO SAMPE SINI, ARTINYA UDAH MAX RETRY — RETURN ERROR
     return {
-        nik,
-        phone: phoneNumber,
-        status: 'error',
-        data: null,
+        nik, phone: phoneNumber, status: 'error', data: null,
         error: `Gagal setelah ${MAX_RETRY} percobaan`,
         timestamp: new Date().toISOString(),
     };
 }
 
 // ==========================================
-// 🔥 CEK BANYAK NIK
+// 🔥 CEK BANYAK NIK (DENGAN LOCK)
 // ==========================================
-
 async function checkMultipleNik(nikList, phoneNumber = null) {
     if (!phoneNumber) phoneNumber = getActivePhone();
-    console.log(`\n🚀 [BATCH] Memproses ${nikList.length} NIK...`);
-    const results = [];
-    await initBrowser();
 
-    for (let i = 0; i < nikList.length; i++) {
-        const nik = nikList[i];
-        console.log(`\n📋 [BATCH] ${i + 1}/${nikList.length} - NIK: ${nik}`);
-        try {
-            const result = await checkSingleNik(nik, phoneNumber);
-            results.push(result);
-            fs.writeFileSync(RESULT_FILE, JSON.stringify(results, null, 2));
-
-            if (i < nikList.length - 1) {
-                console.log('⏳ [BATCH] Delay 500ms...');
-                await new Promise(r => setTimeout(r, 500));   // 🔥 500ms (dari 1000ms)
-            }
-        } catch (e) {
-            console.error(`❌ [BATCH] Gagal NIK ${nik}:`, e.message);
-            results.push({
-                nik,
-                status: 'error',
-                error: e.message,
-                timestamp: new Date().toISOString(),
-            });
-        }
+    if (isProcessing) {
+        console.log('⏳ [LOCK] Masih ada proses NIK berjalan, tunggu...');
+        while (isProcessing) await new Promise(r => setTimeout(r, 1000));
     }
+    isProcessing = true;
 
-    await closeBrowser();
-    console.log(`\n✅ [BATCH] Selesai! ${results.length} NIK diproses`);
-    return results;
+    console.log(`\n🚀 [BATCH] Memproses ${nikList.length} NIK...`);
+
+    try {
+        const results = [];
+        await initBrowser();
+
+        for (let i = 0; i < nikList.length; i++) {
+            const nik = nikList[i];
+            console.log(`\n📋 [BATCH] ${i + 1}/${nikList.length} - NIK: ${nik}`);
+
+            try {
+                const result = await checkSingleNik(nik, phoneNumber);
+                results.push(result);
+                fs.writeFileSync(RESULT_FILE, JSON.stringify(results, null, 2));
+
+                if (i < nikList.length - 1) {
+                    console.log('⏳ [BATCH] Delay 500ms...');
+                    await new Promise(r => setTimeout(r, 500));
+                }
+            } catch (e) {
+                console.error(`❌ [BATCH] Gagal NIK ${nik}:`, e.message);
+                results.push({ nik, status: 'error', error: e.message, timestamp: new Date().toISOString() });
+            }
+        }
+
+        await closeBrowser();
+        console.log(`\n✅ [BATCH] Selesai! ${results.length} NIK diproses`);
+        return results;
+
+    } finally {
+        isProcessing = false;
+        console.log('🔓 [LOCK] Proses selesai, lock dibuka');
+    }
 }
 
 // ==========================================
 // 🔥 EXPORT
 // ==========================================
-
 module.exports = {
     readNikFromExcel,
     initBrowser,
@@ -749,6 +1048,8 @@ module.exports = {
     takeScreenshot,
     parseDptResult,
     isNotRegisteredPage,
+    isOtpFieldVisible,
+    isPhoneFieldVisible,
     waitForNotRegisteredPage,
     CONFIG,
     KPU_URL,
