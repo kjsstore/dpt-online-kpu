@@ -478,21 +478,28 @@ if (/tidak\s+terdaftar/i.test(flat) || /belum\s+terdaftar/i.test(flat)) {
 //   success   -> "Selamat, <nama>" + "Anda telah terdaftar dalam database"
 // ==========================================
 const RESULT_SIGNATURES = {
+    // ⚠️ NOT_REGISTERED diperiksa lebih dulu daripada OTP_MISMATCH.
+    // Halaman sukses juga memuat kata "terdaftar" ("Anda telah terdaftar..."),
+    // dan versi EN "Your data is Not Registered!" memuat "registered".
+    // Jadi kata "registered" tidak boleh dipakai sebagai penanda gagal.
+    NOT_REGISTERED: [
+        'data anda belum terdaftar',
+        'nik anda belum terdaftar',
+        'anda belum terdaftar',
+        'your data is not registered',
+        'contact nearest emb',
+    ],
     OTP_MISMATCH: [
         'oops, something went wrong',
         'tidak menemukan kecocokan',
         'kecocokan request dengan otp',
+        'maaf, data anda tidak ditemukan',   // EN: speak.notregistered (beda dari notMatch)
     ],
     TIMEOUT: [
         'gateway time-out',
         'gateway timeout',
         'terjadi kesalahan saat berkomunikasi dengan server',
-    ],
-    NOT_REGISTERED: [
-        'data anda belum terdaftar',
-        'nik anda belum terdaftar',
-        'anda belum terdaftar',
-        'anda tidak ditemukan',
+        'internal server error',
     ],
 };
 
@@ -505,24 +512,24 @@ const SUCCESS_SIGNATURES = [
 function classifyResult(pageText) {
     const flat = String(pageText || '').toLowerCase().replace(/\s+/g, ' ').trim();
 
-    // 1. OTP salah / tidak cocok
+    // 1. NIK tidak terdaftar (CEK DULU — lihat catatan di RESULT_SIGNATURES)
+    for (const s of RESULT_SIGNATURES.NOT_REGISTERED) {
+        if (flat.includes(s)) {
+            return { status: 'not_registered', reason: `keyword "${s}"`, error: 'Data belum terdaftar di DPT' };
+        }
+    }
+
+    // 2. OTP salah / tidak cocok
     for (const s of RESULT_SIGNATURES.OTP_MISMATCH) {
         if (flat.includes(s)) {
             return { status: 'otp_mismatch', reason: `keyword "${s}"`, error: 'OTP tidak cocok atau kedaluwarsa' };
         }
     }
 
-    // 2. Timeout / error server
+    // 3. Timeout / error server
     for (const s of RESULT_SIGNATURES.TIMEOUT) {
         if (flat.includes(s)) {
             return { status: 'timeout', reason: `keyword "${s}"`, error: 'Server KPU gagal merespons' };
-        }
-    }
-
-    // 3. NIK tidak terdaftar
-    for (const s of RESULT_SIGNATURES.NOT_REGISTERED) {
-        if (flat.includes(s)) {
-            return { status: 'not_registered', reason: `keyword "${s}"`, error: 'Data belum terdaftar di DPT' };
         }
     }
 
