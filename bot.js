@@ -72,6 +72,8 @@ backupZip.startAutoBackupZip();
 const bot = new TelegramBot(config.BOT.TOKEN, { polling: true });
 global.telegramBot = bot;
 global.cekdptMode = {};
+global.cekdptModeV2 = {};
+global.cekdptWaitingNik = {};   // ← TAMBAH INI
 global.searchMode = {};
 
 // ==========================================
@@ -368,12 +370,12 @@ bot.on("message", async (msg) => {
     saveJSON(USERS_FILE, users);
   }
   
-    // ==========================================
-  // 🔥 HANDLE FILE EXCEL UNTUK CEK DPT
+   // ==========================================
+  // 🔥 HANDLE FILE EXCEL UNTUK CEK DPT V1 & V2
   // ==========================================
-    // 🔥 HANDLE FILE EXCEL UNTUK CEK DPT
-  // ==========================================
-    if (msg.document && global.cekdptMode && global.cekdptMode[userId]) {
+  
+  // 🔥 CEK DPT V1
+  if (msg.document && global.cekdptMode && global.cekdptMode[userId]) {
     // 🔥 LOCK: cegah double process
     if (global.cekdptMode[userId] === 'processing') {
       return bot.sendMessage(id, '⏳ Masih memproses file sebelumnya. Tunggu ya...');
@@ -385,34 +387,33 @@ bot.on("message", async (msg) => {
 
     // Validasi ekstensi
     if (!fileName.toLowerCase().endsWith('.xlsx') && !fileName.toLowerCase().endsWith('.xls')) {
-      delete global.cekdptMode[userId];  // Reset lock
+      delete global.cekdptMode[userId];
       return bot.sendMessage(id, '❌ File harus berformat .xlsx atau .xls\n\nSilakan kirim ulang file Excel.');
     }
 
-    const loadingMsg = await bot.sendMessage(id, '⏳ *File diterima!*\n\nSedang memproses...', {
+    const loadingMsg = await bot.sendMessage(id, '⏳ *File diterima!*\n\n📌 Mode: *CEK DPT V1*\nSedang memproses...', {
       parse_mode: 'Markdown'
     });
 
     try {
-      // Ambil link download dari Telegram
       const fileLink = await bot.getFileLink(doc.file_id);
-      console.log(`📥 [CEKDPT] File dari ${userId}: ${fileName}`);
-      console.log(`📥 [CEKDPT] URL: ${fileLink}`);
+      console.log(`📥 [CEKDPT V1] File dari ${userId}: ${fileName}`);
+      console.log(`📥 [CEKDPT V1] URL: ${fileLink}`);
 
-      // 🔥 KIRIM KE WA BOT UNTUK DIPROSES
+      // 🔥 KIRIM KE WA BOT UNTUK DIPROSES (V1)
       await axios.post(`${config.URLS.WA_BOT}/api/cekdpt-from-telegram`, {
         chatId: id.toString(),
         userId: userId.toString(),
         username: msg.from.username || msg.from.first_name || '-',
         fileUrl: fileLink,
-        fileName: fileName
+        fileName: fileName,
+        version: 'v1'
       }, { timeout: 30000 });
 
-      // Hapus loading
       try { await bot.deleteMessage(id, loadingMsg.message_id); } catch (e) {}
 
     } catch (error) {
-      console.log(`❌ [CEKDPT] Error:`, error.message);
+      console.log(`❌ [CEKDPT V1] Error:`, error.message);
       try { await bot.deleteMessage(id, loadingMsg.message_id); } catch (e) {}
 
       if (error.code === 'ECONNREFUSED') {
@@ -428,10 +429,96 @@ bot.on("message", async (msg) => {
         );
       }
     } finally {
-      // 🔥 SELALU reset lock
       delete global.cekdptMode[userId];
     }
     return;
+  }
+  
+    // ==========================================
+  // 🔥 HANDLE NIK TEKS UNTUK CEK DPT V2
+  // ==========================================
+    if (global.cekdptWaitingNik && global.cekdptWaitingNik[userId]) {
+    const isCommand = !text || text.startsWith('/') || text.startsWith('.') || text.startsWith('!');
+    const isBatal = text === '⋪ ❌ 𝗕𝗔𝗧𝗔𝗟 ⋫' || text === '❌ BATAL' || 
+                    text === '⋪ 🔙 𝗞𝗘𝗠𝗕𝗔𝗟𝗜 𝗞𝗘 𝗠𝗘𝗡𝗨 ⋫' || text === '🔙 KEMBALI KE MENU';
+
+    if (isCommand || isBatal) {
+      // Lanjut ke handler command di bawah
+    } else {
+      console.log(`📩 [CEKDPT V2] Terima NIK dari ${userId}: "${text.substring(0, 100)}"`);
+      
+      // 🔥 PARSE NIK (16 digit per NIK)
+      const tokens = text.split(/[\s,;\n\r\t]+/);
+      const nikList = [];
+      const seen = new Set();
+      
+      for (const token of tokens) {
+        const clean = token.replace(/[^0-9]/g, '');
+        if (clean.length === 16 && !seen.has(clean)) {
+          seen.add(clean);
+          nikList.push(clean);
+        }
+      }
+      
+      if (nikList.length === 0) {
+        await bot.sendMessage(id, 
+          `❌ *Tidak ada NIK valid ditemukan!*\n\n` +
+          `📌 Format:\n` +
+          '```\n' +
+          `37042356757867886\n` +
+          `37042356757867886\n` +
+          '```\n\n' +
+          `• NIK harus 16 digit\n` +
+          `• Bisa 1 per baris / spasi / koma\n` +
+          `• Max 50 NIK`,
+          { parse_mode: 'Markdown' }
+        );
+        return;
+      }
+      
+      if (nikList.length > 50) {
+        await bot.sendMessage(id, 
+          `❌ *Terlalu banyak NIK!*\n\n` +
+          `📋 Terdeteksi: *${nikList.length}*\n` +
+          `📌 Max: *50 NIK*\n\n` +
+          `💡 Silakan kirim ulang dengan jumlah ≤ 50, atau bagi jadi beberapa request.`,
+          { parse_mode: 'Markdown' }
+        );
+        return;
+      }
+      
+      // 🔥 HAPUS FLAG waiting_nik
+      delete global.cekdptWaitingNik[userId];
+      
+      // 🔥 KIRIM LOADING
+      const loadingMsg = await bot.sendMessage(id, 
+        `⏳ *Memproses ${nikList.length} NIK...*\n\n📌 Mode: *CEK DPT V2*\nMohon tunggu...`,
+        { parse_mode: 'Markdown' }
+      );
+      
+      try {
+        // 🔥 KIRIM KE WA BOT
+        await axios.post(`${config.URLS.WA_BOT}/api/cekdpt-v2-from-nik`, {
+          chatId: id.toString(),
+          userId: userId.toString(),
+          username: msg.from.username || msg.from.first_name || '-',
+          nikList: nikList
+        }, { timeout: 30000 });
+        
+        try { await bot.deleteMessage(id, loadingMsg.message_id); } catch (e) {}
+        
+      } catch (error) {
+        console.log(`❌ [CEKDPT V2] Error:`, error.message);
+        try { await bot.deleteMessage(id, loadingMsg.message_id); } catch (e) {}
+        
+        if (error.code === 'ECONNREFUSED') {
+          await bot.sendMessage(id, `❌ *WA Bot tidak berjalan!*\n\nRestart: pm2 restart wabot`);
+        } else {
+          await bot.sendMessage(id, `❌ *Gagal memproses NIK*\n\nError: ${error.message}`);
+        }
+      }
+      return;
+    }
   }
   
   if (global.searchMode && global.searchMode[userId]) {
@@ -3371,8 +3458,63 @@ if (data === 'leak_cari') {
     return;
   }
   
+    // ==========================================
+  // 🔥 CEK DPT V2 - Input NIK Langsung (via Callback)
+  // ==========================================
+  if (data === 'cekdpt_v2') {
+    const userId = q.from.id;
+    
+    global.cekdptWaitingNik = global.cekdptWaitingNik || {};
+    global.cekdptWaitingNik[userId] = true;
+    
+    // Reset flag V1
+    if (global.cekdptMode) delete global.cekdptMode[userId];
+    
+    const content = 
+`🆕 *CEK DPT ONLINE V2*
 
-            if (data === "back_to_main" || data === "back_to_menu") {
+📝 *Kirim NIK langsung di chat (tanpa file)*
+
+━━━━━━━━━━━━━━━━━━
+📋 *Format:*
+Kirim 1 NIK per baris, atau pisah dengan spasi/koma:
+
+\`\`\`
+37042356757867886
+37042356757867886
+37042356757867886
+\`\`\`
+
+📌 *Ketentuan:*
+• NIK harus 16 digit
+• Bisa 1 NIK atau banyak (max 50 NIK)
+• Harga: Rp500/NIK valid
+• NIK tidak terdaftar = GRATIS
+
+📌 *Output:*
+• ≤ 10 NIK → Hasil dikirim sebagai teks
+• > 10 NIK → Hasil dikirim sebagai file Excel
+
+⏱️ _Proses ±1-3 menit tergantung jumlah NIK_
+
+💡 Kirim NIK sekarang...`;
+
+    const options = {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "❌ BATAL", callback_data: "back_to_main" }]
+        ]
+      }
+    };
+    
+    try { await bot.deleteMessage(chatId, q.message.message_id); } catch (e) {}
+    await bot.sendMessage(chatId, content, options);
+    return;
+  }
+  
+
+   if (data === "back_to_main" || data === "back_to_menu") {
     try { await bot.deleteMessage(chatId, q.message.message_id); } catch (e) {}
     // ❌ JANGAN HAPUS REPLY KEYBOARD
     return menuFirst.showMainMenu(bot, chatId, isAuth, users);

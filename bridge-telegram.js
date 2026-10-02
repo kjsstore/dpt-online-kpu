@@ -812,11 +812,19 @@ app.post('/sync-all-to-wabot', async (req, res) => {
 // ==========================================
 // 🔥 ENDPOINT: TERIMA HASIL CEK DPT DARI WA BOT
 // ==========================================
+// ==========================================
+// 🔥 ENDPOINT: TERIMA HASIL CEK DPT DARI WA BOT (V1 & V2)
+// ==========================================
 app.post('/send-cekdpt-result', async (req, res) => {
     try {
-        const { chatId, result, status, fileName } = req.body;
+        const { chatId, result, status, fileName, version } = req.body;
         
-        console.log(`📥 [CEKDPT-RESULT] Terima hasil untuk chatId: ${chatId}`);
+        // 🔥 DETEKSI VERSION (default v1)
+        const cekVersion = (version || 'v1').toLowerCase();
+        const versionLabel = cekVersion === 'v2' ? 'V2' : 'V1';
+        const versionEmoji = cekVersion === 'v2' ? '🆕' : '📌';
+        
+        console.log(`📥 [CEKDPT ${versionLabel}-RESULT] Terima hasil untuk chatId: ${chatId}`);
         
         if (!chatId) {
             return res.status(400).json({ status: 'error', message: 'chatId required' });
@@ -831,54 +839,58 @@ app.post('/send-cekdpt-result', async (req, res) => {
         // 🔥 FORMAT RINGKAS
         let message;
         
-        if (status === 'success') {
-            // Coba extract angka dari result kalau formatnya "Total NIK: 2, Berhasil: 2..."
-            let total = 0, sukses = 0, tidakAda = 0, gagal = 0;
-            
-            if (typeof result === 'string') {
-                // Coba parse dari string result
-                const totalMatch = result.match(/[Tt]otal\s*(?:NIK)?\s*[:=]?\s*(\d+)/);
-                const suksesMatch = result.match(/[Bb]erhasil\s*[:=]?\s*(\d+)/);
-                const tidakMatch = result.match(/[Tt]idak\s*[Tt]erdaftar\s*[:=]?\s*(\d+)/);
-                const gagalMatch = result.match(/[Gg]agal\s*[:=]?\s*(\d+)/);
-                
-                if (totalMatch) total = parseInt(totalMatch[1]);
-                if (suksesMatch) sukses = parseInt(suksesMatch[1]);
-                if (tidakMatch) tidakAda = parseInt(tidakMatch[1]);
-                if (gagalMatch) gagal = parseInt(gagalMatch[1]);
-            }
-            
-            // Kalau berhasil parse angka, pakai format ringkas
-            if (total > 0) {
-                message = `📊 *HASIL CEK DPT*\n\n` +
-                          `Total: ${total} NIK\n` +
-                          `✅ ${sukses} | ⚠️ ${tidakAda} | ❌ ${gagal}`;
+                if (status === 'success') {
+            // 🔥 KALAU RAW = TRUE, KIRIM APA ADANYA
+            if (req.body.raw === true) {
+                message = result;
             } else {
-                // Fallback: kirim result apa adanya tapi tanpa header panjang
-                message = `📊 *HASIL CEK DPT*\n\n${result}`;
+                // Coba extract angka dari result
+                let total = 0, sukses = 0, tidakAda = 0, gagal = 0;
+                
+                if (typeof result === 'string') {
+                    const totalMatch = result.match(/[Tt]otal\s*(?:NIK)?\s*[:=]?\s*(\d+)/);
+                    const suksesMatch = result.match(/[Bb]erhasil\s*[:=]?\s*(\d+)/);
+                    const tidakMatch = result.match(/[Tt]idak\s*[Tt]erdaftar\s*[:=]?\s*(\d+)/);
+                    const gagalMatch = result.match(/[Gg]agal\s*[:=]?\s*(\d+)/);
+                    
+                    if (totalMatch) total = parseInt(totalMatch[1]);
+                    if (suksesMatch) sukses = parseInt(suksesMatch[1]);
+                    if (tidakMatch) tidakAda = parseInt(tidakMatch[1]);
+                    if (gagalMatch) gagal = parseInt(gagalMatch[1]);
+                }
+                
+                // 🔥 HEADER BEDA PER VERSION
+                const header = `${versionEmoji} *HASIL CEK DPT ${versionLabel}*`;
+                
+                if (total > 0) {
+                    message = `${header}\n\n` +
+                              `Total: ${total} NIK\n` +
+                              `✅ ${sukses} | ⚠️ ${tidakAda} | ❌ ${gagal}`;
+                } else {
+                    message = `${header}\n\n${result}`;
+                }
             }
         } else if (status === 'processing') {
-            message = result || `⏳ Memproses...`;
+            message = result || `⏳ Memproses ${versionLabel}...`;
         } else {
-            // 🔥 SKIP — jangan kirim "Gagal proses file"
-            console.log(`⚠️ [CEKDPT-RESULT] Skip status "${status}": ${result}`);
+            console.log(`⚠️ [CEKDPT ${versionLabel}-RESULT] Skip status "${status}": ${result}`);
             return res.json({ status: 'ok', skipped: true });
         }
         
-           // Kirim ke Telegram user — SIMPAN messageId
+        // Kirim ke Telegram user — SIMPAN messageId
         let sentMessage = null;
         try {
             sentMessage = await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
-            console.log(`✅ [CEKDPT-RESULT] Terkirim ke ${chatId} (msgId: ${sentMessage.message_id})`);
+            console.log(`✅ [CEKDPT ${versionLabel}-RESULT] Terkirim ke ${chatId} (msgId: ${sentMessage.message_id})`);
         } catch (err) {
             // Fallback tanpa markdown
             sentMessage = await bot.sendMessage(chatId, message);
-            console.log(`✅ [CEKDPT-RESULT] Terkirim (fallback) ke ${chatId}`);
+            console.log(`✅ [CEKDPT ${versionLabel}-RESULT] Terkirim (fallback) ke ${chatId}`);
         }
         
-        // 🔥 RETURN messageId biar bisa dihapus nanti
         res.json({ 
             status: 'ok', 
+            version: cekVersion,
             messageId: sentMessage ? sentMessage.message_id : null 
         });
         
@@ -923,11 +935,19 @@ app.post('/delete-message', async (req, res) => {
 // ==========================================
 // 🔥 ENDPOINT: KIRIM FILE EXCEL HASIL CEK DPT KE TELEGRAM
 // ==========================================
+// ==========================================
+// 🔥 ENDPOINT: KIRIM FILE EXCEL HASIL CEK DPT KE TELEGRAM (V1 & V2)
+// ==========================================
 app.post('/send-cekdpt-file', async (req, res) => {
     try {
-        const { chatId, fileName, fileBase64, caption } = req.body;
+        const { chatId, fileName, fileBase64, caption, version } = req.body;
         
-        console.log(`📥 [CEKDPT-FILE] Terima file untuk ${chatId}: ${fileName}`);
+        // 🔥 DETEKSI VERSION
+        const cekVersion = (version || 'v1').toLowerCase();
+        const versionLabel = cekVersion === 'v2' ? 'V2' : 'V1';
+        const versionEmoji = cekVersion === 'v2' ? '🆕' : '📌';
+        
+        console.log(`📥 [CEKDPT ${versionLabel}-FILE] Terima file untuk ${chatId}: ${fileName}`);
         
         if (!chatId || !fileBase64) {
             return res.status(400).json({ status: 'error', message: 'chatId & fileBase64 required' });
@@ -942,16 +962,19 @@ app.post('/send-cekdpt-file', async (req, res) => {
         // Convert base64 ke buffer
         const fileBuffer = Buffer.from(fileBase64, 'base64');
         
+        // 🔥 CAPTION DEFAULT PER VERSION
+        const defaultCaption = `${versionEmoji} File Hasil CEK DPT ${versionLabel}: ${fileName}`;
+        
         // Kirim file ke Telegram
         await bot.sendDocument(chatId, fileBuffer, {
-            caption: caption || `📊 File: ${fileName}`
+            caption: caption || defaultCaption
         }, {
             filename: fileName,
             contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
         });
         
-        console.log(`✅ [CEKDPT-FILE] File terkirim ke ${chatId}`);
-        res.json({ status: 'ok' });
+        console.log(`✅ [CEKDPT ${versionLabel}-FILE] File terkirim ke ${chatId}`);
+        res.json({ status: 'ok', version: cekVersion });
         
     } catch (error) {
         console.log('❌ [CEKDPT-FILE] Error:', error.message);

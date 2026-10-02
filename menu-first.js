@@ -1,17 +1,23 @@
 // ============================================================
 // MENU-FIRST.JS - Menu pertama + Menu utama (REPLY KEYBOARD)
-// 🔥 Gaya: sama dengan menu.js DATA KONOHA (pakai style: COLOR.X)
+// 🔥 Update: Pakai BANNER JPG
 // ============================================================
 
 const fs = require('fs');
 const path = require('path');
 const saldo = require('./saldo');
 
-// 🔥 WARNA — KONSTANTA BIAR KONSISTEN
+// ==========================================
+// 🔥 BANNER URL — GANTI SAMA LINK JPG KAMU
+// ==========================================
+const BANNER_URL = 'https://files.catbox.moe/t7zmak.png'; // ← ganti link ini
+const BANNER_URL_PROFILE = 'https://files.catbox.moe/t7zmak.png'; // ← ganti link ini
+
+// 🔥 WARNA
 const COLOR = {
-    PRIMARY: 'primary',   // 🔵 BIRU
-    SUCCESS: 'success',   // 🟢 HIJAU
-    DANGER:  'danger'     // 🔴 MERAH
+    PRIMARY: 'primary',
+    SUCCESS: 'success',
+    DANGER:  'danger'
 };
 
 // ==========================================
@@ -51,50 +57,42 @@ const deleteMainMsg = async (bot, chatId) => {
 };
 
 // ==========================================
-// KEYBOARD MENU-FIRST
+// KEYBOARD
 // ==========================================
 const FIRST_KEYBOARD = [
     [{ text: '⋪ MENU ⋫', style: COLOR.SUCCESS }]
 ];
 
-// ==========================================
-// KEYBOARD MENU UTAMA — USER BIASA
-// ==========================================
 const MAIN_KEYBOARD_USER = [
+    [{ text: '⋪ 𝗣𝗥𝗢𝗙𝗜𝗟 ⋫', style: COLOR.DANGER }],
     [
-        { text: '⋪ 𝗣𝗥𝗢𝗙𝗜𝗟 ⋫', style: COLOR.DANGER }
+        { text: '⋪ 𝗖𝗘𝗞 𝗗𝗣𝗧 𝗩𝟭 ⋫', style: COLOR.SUCCESS },
+        { text: '⋪ 𝗖𝗘𝗞 𝗗𝗣𝗧 𝗩𝟮 ⋫', style: COLOR.PRIMARY }
     ],
     [
-        { text: '⋪ 𝗖𝗘𝗞 𝗗𝗣𝗧 ⋫', style: COLOR.SUCCESS },
         { text: '⋪ 𝗧𝗢𝗣𝗨𝗣 ⋫', style: COLOR.PRIMARY }
     ],
-    [
-        { text: '♲ 𝗥𝗘𝗙𝗥𝗘𝗦𝗛 ♲', style: COLOR.DANGER }
-    ]
+    [{ text: '♲ 𝗥𝗘𝗙𝗥𝗘𝗦𝗛 ♲', style: COLOR.DANGER }]
 ];
 
-// ==========================================
-// KEYBOARD MENU UTAMA — OWNER
-// ==========================================
 const MAIN_KEYBOARD_OWNER = [
+    [{ text: '⋪ 𝗣𝗥𝗢𝗙𝗜𝗟 ⋫', style: COLOR.DANGER }],
     [
-        { text: '⋪ 𝗣𝗥𝗢𝗙𝗜𝗟 ⋫', style: COLOR.DANGER }
+        { text: '⋪ 𝗖𝗘𝗞 𝗗𝗣𝗧 𝗩𝟭 ⋫', style: COLOR.SUCCESS },
+        { text: '⋪ 𝗖𝗘𝗞 𝗗𝗣𝗧 𝗩𝟮 ⋫', style: COLOR.PRIMARY }
     ],
     [
-        { text: '⋪ 𝗖𝗘𝗞 𝗗𝗣𝗧 ⋫', style: COLOR.SUCCESS },
         { text: '⋪ 𝗧𝗢𝗣𝗨𝗣 ⋫', style: COLOR.PRIMARY }
     ],
     [
         { text: '⋪ 𝗦𝗘𝗧𝗧𝗜𝗡𝗚 ⋫', style: COLOR.DANGER },
         { text: '⋪ 𝗠𝗘𝗡𝗨 𝗪𝗔 ⋫', style: COLOR.SUCCESS }
     ],
-    [
-        { text: '♲ 𝗥𝗘𝗙𝗥𝗘𝗦𝗛 ♲', style: COLOR.DANGER }
-    ]
+    [{ text: '♲ 𝗥𝗘𝗙𝗥𝗘𝗦𝗛 ♲', style: COLOR.DANGER }]
 ];
 
 // ==========================================
-// SHOW MENU-FIRST (WELCOME + REPLY "MENU")
+// SHOW MENU-FIRST (PAKAI BANNER)
 // ==========================================
 const showFirstMenu = async (bot, chatId, msg = null) => {
     try {
@@ -116,7 +114,7 @@ const showFirstMenu = async (bot, chatId, msg = null) => {
             username = msg.from.username || msg.from.first_name || username;
         }
 
-        const content = `
+        const caption = `
 ◉ |  𝘾𝙚𝙠_𝘽𝙔-𝙕𝙊𝙍𝙊
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━⩥
 ┏┅➤  S E L A M A T   D A T A N G
@@ -139,14 +137,30 @@ const showFirstMenu = async (bot, chatId, msg = null) => {
 ◉  2026 - 2027 | All Rights Reserved
 `;
 
-        const sent = await bot.sendMessage(chatId, content, {
-            parse_mode: 'HTML',
-            reply_markup: {
-                keyboard: FIRST_KEYBOARD,
-                resize_keyboard: true,
-                one_time_keyboard: false
-            }
-        });
+        // 🔥 PAKAI sendPhoto (BANNER + CAPTION)
+        let sent;
+        try {
+            sent = await bot.sendPhoto(chatId, BANNER_URL, {
+                caption: caption,
+                parse_mode: 'HTML',
+                reply_markup: {
+                    keyboard: FIRST_KEYBOARD,
+                    resize_keyboard: true,
+                    one_time_keyboard: false
+                }
+            });
+        } catch (photoErr) {
+            console.log(`⚠️ [MENU-FIRST] Gagal kirim banner: ${photoErr.message}`);
+            // 🔥 FALLBACK: kirim text aja kalau banner gagal
+            sent = await bot.sendMessage(chatId, caption, {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    keyboard: FIRST_KEYBOARD,
+                    resize_keyboard: true,
+                    one_time_keyboard: false
+                }
+            });
+        }
 
         if (sent && sent.message_id) {
             lastFirstMsg[chatId] = sent.message_id;
@@ -163,7 +177,7 @@ const showFirstMenu = async (bot, chatId, msg = null) => {
 };
 
 // ==========================================
-// SHOW MENU UTAMA
+// SHOW MENU UTAMA (PAKAI BANNER)
 // ==========================================
 const showMainMenu = async (bot, chatId, isAuthorizedUser = false, users = {}) => {
     try {
@@ -188,7 +202,7 @@ const showMainMenu = async (bot, chatId, isAuthorizedUser = false, users = {}) =
         let saldoUser = saldo.getSaldo(chatId);
         if (isAuthorizedUser) saldoUser = 1000000000;
 
-        const content = `
+        const caption = `
 ◉ |  𝘾𝙚𝙠_𝘽𝙔-𝙕𝙊𝙍𝙊
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━⩥
 ┏┅➤  U S E R   I N F O
@@ -207,14 +221,30 @@ const showMainMenu = async (bot, chatId, isAuthorizedUser = false, users = {}) =
         // 🔥 PILIH KEYBOARD
         const keyboard = isAuthorizedUser ? MAIN_KEYBOARD_OWNER : MAIN_KEYBOARD_USER;
 
-        const sent = await bot.sendMessage(chatId, content, {
-            parse_mode: 'HTML',
-            reply_markup: {
-                keyboard: keyboard,
-                resize_keyboard: true,
-                one_time_keyboard: false
-            }
-        });
+        // 🔥 PAKAI sendPhoto
+        let sent;
+        try {
+            sent = await bot.sendPhoto(chatId, BANNER_URL, {
+                caption: caption,
+                parse_mode: 'HTML',
+                reply_markup: {
+                    keyboard: keyboard,
+                    resize_keyboard: true,
+                    one_time_keyboard: false
+                }
+            });
+        } catch (photoErr) {
+            console.log(`⚠️ [MENU-FIRST] Gagal kirim banner: ${photoErr.message}`);
+            // 🔥 FALLBACK
+            sent = await bot.sendMessage(chatId, caption, {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    keyboard: keyboard,
+                    resize_keyboard: true,
+                    one_time_keyboard: false
+                }
+            });
+        }
 
         if (sent && sent.message_id) {
             lastMainMsg[chatId] = sent.message_id;
@@ -231,11 +261,10 @@ const showMainMenu = async (bot, chatId, isAuthorizedUser = false, users = {}) =
 };
 
 // ==========================================
-// 🔥 SHOW PROFIL MENU (TANPA DAERAH, TANPA SEWA)
+// SHOW PROFIL MENU (PAKAI BANNER)
 // ==========================================
 const showProfilMenu = async (bot, chatId, sendNewMessage = null) => {
     try {
-        // 🔥 HAPUS PESAN LAMA
         const { lastMessages } = require('./menu');
         if (lastMessages[chatId]) {
             try { await bot.deleteMessage(chatId, lastMessages[chatId]); } catch (e) {}
@@ -244,22 +273,17 @@ const showProfilMenu = async (bot, chatId, sendNewMessage = null) => {
         await deleteFirstMsg(bot, chatId);
         await deleteMainMsg(bot, chatId);
 
-        const fs = require('fs');
-        const path = require('path');
-
-        // 🔥 AMBIL DATA USER
         const users = loadUsers();
         const userData = users[chatId] || {};
 
         const username = userData.username || userData.first_name || '-';
-        const firstName = userData.first_name || '-';
         const joinDate = userData.date
             ? new Date(userData.date).toLocaleDateString('id-ID', {
                 day: 'numeric', month: 'long', year: 'numeric'
             })
             : '-';
 
-        // 🔥 CEK STATUS (OWNER / ADMIN / USER)
+        // 🔥 CEK STATUS
         const config = require('./config');
         const ownerId = config.BOT.OWNER_ID.toString();
         let statusText = 'User Biasa';
@@ -283,16 +307,12 @@ const showProfilMenu = async (bot, chatId, sendNewMessage = null) => {
         }
 
         // 🔥 AMBIL SALDO
-// 🔥 AMBIL SALDO
-let saldoUser = saldo.getSaldo(chatId);
+        let saldoUser = saldo.getSaldo(chatId);
+        if (chatId.toString() === ownerId) {
+            saldoUser = 1000000000;
+        }
 
-// 🔥 OWNER UNLIMITED
-if (chatId.toString() === ownerId) {
-    saldoUser = 1000000000;
-}
-
-        // 🔥 BUILD CONTENT
-        const content = `
+        const caption = `
 ╭ ───┈ " 👤 " ── ⬦ ׁ
 ├  <b>PROFIL USER</b>
 ╰─┈꯭─꯭──꯭─꯭─꯭──꯭─╌─꯭─꯭─꯭─꯭──꯭──꯭
@@ -307,17 +327,30 @@ ${statusEmoji} <b>Status</b>     : ${statusText}
 ━━━━━━━━━━━━━━━━━━
 `;
 
-        // 🔥 KIRIM PESAN DENGAN TOMBOL MENU
-        const sent = await bot.sendMessage(chatId, content, {
-            parse_mode: 'HTML',
-            reply_markup: {
-                keyboard: FIRST_KEYBOARD,
-                resize_keyboard: true,
-                one_time_keyboard: false
-            }
-        });
+        // 🔥 PAKAI sendPhoto
+        let sent;
+        try {
+            sent = await bot.sendPhoto(chatId, BANNER_URL_PROFILE, {
+                caption: caption,
+                parse_mode: 'HTML',
+                reply_markup: {
+                    keyboard: FIRST_KEYBOARD,
+                    resize_keyboard: true,
+                    one_time_keyboard: false
+                }
+            });
+        } catch (photoErr) {
+            console.log(`⚠️ [MENU-FIRST] Gagal kirim banner profil: ${photoErr.message}`);
+            sent = await bot.sendMessage(chatId, caption, {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    keyboard: FIRST_KEYBOARD,
+                    resize_keyboard: true,
+                    one_time_keyboard: false
+                }
+            });
+        }
 
-        // 🔥 SIMPAN SEBAGAI PESAN TERAKHIR
         if (sent && sent.message_id) {
             lastMessages[chatId] = sent.message_id;
             lastFirstMsg[chatId] = sent.message_id;
@@ -333,7 +366,7 @@ ${statusEmoji} <b>Status</b>     : ${statusText}
 };
 
 // ==========================================
-// HANDLE TOMBOL (REPLY TEXT)
+// HANDLE TOMBOL
 // ==========================================
 const handleFirstMenuButton = async (bot, chatId, text, msg = null, isAuthorizedUser = false, users = {}) => {
     // 🔥 MENU
@@ -341,6 +374,38 @@ const handleFirstMenuButton = async (bot, chatId, text, msg = null, isAuthorized
         console.log(`[MENU-FIRST] Buka menu utama: ${chatId}`);
         await showMainMenu(bot, chatId, isAuthorizedUser, users);
         return { handled: true, action: 'OPEN_MAIN_MENU' };
+    }
+    
+        // 🔥 TOMBOL BATAL
+    if (text === '⋪ ❌ 𝗕𝗔𝗧𝗔𝗟 ⋫' || text === '❌ BATAL') {
+        console.log(`[MENU-FIRST] Batal: ${chatId}`);
+
+        if (global.cekdptMode) delete global.cekdptMode[chatId];
+        if (global.cekdptWaitingNik) delete global.cekdptWaitingNik[chatId];
+
+        await bot.sendMessage(chatId,
+            `❌ *DIBATALKAN*\n\nSilakan pilih menu lagi.`,
+            {
+                parse_mode: 'Markdown',
+                reply_markup: {
+                    keyboard: [[{ text: '⋪ MENU ⋫', style: COLOR.SUCCESS }]],
+                    resize_keyboard: true,
+                    one_time_keyboard: false
+                }
+            }
+        );
+        return { handled: true, action: 'BATAL' };
+    }
+
+    // 🔥 TOMBOL KEMBALI KE MENU
+    if (text === '⋪ 🔙 𝗞𝗘𝗠𝗕𝗔𝗟𝗜 𝗞𝗘 𝗠𝗘𝗡𝗨 ⋫' || text === '🔙 KEMBALI KE MENU') {
+        console.log(`[MENU-FIRST] Kembali ke menu: ${chatId}`);
+
+        if (global.cekdptMode) delete global.cekdptMode[chatId];
+        if (global.cekdptWaitingNik) delete global.cekdptWaitingNik[chatId];
+
+        await showMainMenu(bot, chatId, isAuthorizedUser, users);
+        return { handled: true, action: 'BACK_TO_MENU' };
     }
 
     // 🔥 REFRESH
@@ -350,31 +415,27 @@ const handleFirstMenuButton = async (bot, chatId, text, msg = null, isAuthorized
         return { handled: true, action: 'REFRESH' };
     }
 
-    // 🔥 PROFIL (LANGSUNG DARI MENU-FIRST.JS)
+    // 🔥 PROFIL
     if (text === '⋪ 𝗣𝗥𝗢𝗙𝗜𝗟 ⋫') {
         console.log(`[MENU-FIRST] Profil: ${chatId}`);
         await showProfilMenu(bot, chatId);
         return { handled: true, action: 'PROFIL' };
     }
 
-    // 🔥 CEK DPT
-        // 🔥 CEK DPT
-    if (text === '⋪ 𝗖𝗘𝗞 𝗗𝗣𝗧 ⋫') {
-        console.log(`[MENU-FIRST] Cek DPT: ${chatId}`);
+    // 🔥 CEK DPT V1 (FILE EXCEL)
+    if (text === '⋪ 𝗖𝗘𝗞 𝗗𝗣𝗧 𝗩𝟭 ⋫' || text === '⋪ 𝗖𝗘𝗞 𝗗𝗣𝗧 ⋫') {
+        console.log(`[MENU-FIRST] Cek DPT V1: ${chatId}`);
 
-        // 🔥 CEK OWNER DULU — OWNER GRATIS, SKIP CEK SALDO
         if (!isAuthorizedUser) {
             const saldoUser = saldo.getSaldo(chatId);
             const MINIMAL_SALDO = 1000;
 
             if (saldoUser < MINIMAL_SALDO) {
-                console.log(`[MENU-FIRST] Saldo kurang: ${chatId} (Rp${saldoUser})`);
-
                 await bot.sendMessage(chatId,
                     `⚠️ *SALDO KURANG*\n\n` +
                     `💰 Saldo kamu: *${saldo.formatRupiah(saldoUser)}*\n` +
                     `📌 Minimal saldo: *${saldo.formatRupiah(MINIMAL_SALDO)}*\n\n` +
-                    `👉 Silakan *TOPUP* dulu sebelum Cek DPT.\n` +
+                    `👉 Silakan *TOPUP* dulu sebelum Cek DPT V1.\n` +
                     `Klik tombol *⋪ 𝗧𝗢𝗣𝗨𝗣 ⋫* di menu.`,
                     { parse_mode: 'Markdown' }
                 );
@@ -384,19 +445,94 @@ const handleFirstMenuButton = async (bot, chatId, text, msg = null, isAuthorized
             console.log(`👑 [MENU-FIRST] Owner mode — skip cek saldo`);
         }
 
-        // ✅ lanjut minta file Excel (owner & user yg saldo cukup)
+        if (global.cekdptWaitingNik) delete global.cekdptWaitingNik[chatId];
+
         global.cekdptMode = global.cekdptMode || {};
         global.cekdptMode[chatId] = true;
 
         await bot.sendMessage(chatId,
-            `🔍 *CEK DPT ONLINE*\n\n📄 *Silakan kirim file Excel (.xlsx) berisi NIK*\n\n` +
+            `📌 *CEK DPT ONLINE V1*\n\n📄 *Silakan kirim file Excel (.xlsx) berisi NIK*\n\n` +
             `📋 *Format File:*\n• Kolom A: NIK (16 digit)\n• Bisa banyak baris\n• File harus .xlsx atau .xls\n\n` +
             `⏱️ Proses ±1-3 menit tergantung jumlah NIK`,
-            { parse_mode: 'Markdown' }
+            {
+                parse_mode: 'Markdown',
+                reply_markup: {
+    keyboard: [
+        [{ text: '⋪ ❌ 𝗕𝗔𝗧𝗔𝗟 ⋫', style: COLOR.DANGER }],
+        [{ text: '⋪ 🔙 𝗞𝗘𝗠𝗕𝗔𝗟𝗜 𝗞𝗘 𝗠𝗘𝗡𝗨 ⋫', style: COLOR.PRIMARY }]
+    ],
+    resize_keyboard: true,
+    one_time_keyboard: false
+}
+            }
         );
-        return { handled: true, action: 'CEKDPT' };
+        return { handled: true, action: 'CEKDPT_V1' };
     }
 
+    // 🔥 CEK DPT V2 (KIRIM NIK LANGSUNG)
+    if (text === '⋪ 𝗖𝗘𝗞 𝗗𝗣𝗧 𝗩𝟮 ⋫') {
+        console.log(`[MENU-FIRST] Cek DPT V2: ${chatId}`);
+
+        if (!isAuthorizedUser) {
+            const saldoUser = saldo.getSaldo(chatId);
+            const MINIMAL_SALDO = 1000;
+
+            if (saldoUser < MINIMAL_SALDO) {
+                await bot.sendMessage(chatId,
+                    `⚠️ *SALDO KURANG*\n\n` +
+                    `💰 Saldo kamu: *${saldo.formatRupiah(saldoUser)}*\n` +
+                    `📌 Minimal saldo: *${saldo.formatRupiah(MINIMAL_SALDO)}*\n\n` +
+                    `👉 Silakan *TOPUP* dulu sebelum Cek DPT V2.\n` +
+                    `Klik tombol *⋪ 𝗧𝗢𝗣𝗨𝗣 ⋫* di menu.`,
+                    { parse_mode: 'Markdown' }
+                );
+                return { handled: true, action: 'CEKDPT_V2_NO_SALDO' };
+            }
+        } else {
+            console.log(`👑 [MENU-FIRST] Owner mode — skip cek saldo`);
+        }
+
+        if (global.cekdptMode) delete global.cekdptMode[chatId];
+
+        global.cekdptWaitingNik = global.cekdptWaitingNik || {};
+        global.cekdptWaitingNik[chatId] = true;
+
+        await bot.sendMessage(chatId,
+            `🆕 *CEK DPT ONLINE V2*\n\n` +
+            `📝 *Kirim NIK langsung di chat (tanpa file)*\n\n` +
+            `━━━━━━━━━━━━━━━━━━\n` +
+            `📋 *Format:*\n` +
+            `Kirim 1 NIK per baris, atau pisah dengan spasi/koma:\n\n` +
+            '```\n' +
+            `37042356757867886\n` +
+            `37042356757867886\n` +
+            `37042356757867886\n` +
+            '```\n\n' +
+            `📌 *Ketentuan:*\n` +
+            `• NIK harus 16 digit\n` +
+            `• Bisa 1 NIK atau banyak (max 50 NIK)\n` +
+            `• Harga: Rp500/NIK valid\n` +
+            `• NIK tidak terdaftar = GRATIS\n\n` +
+            `📌 *Output:*\n` +
+            `• ≤ 10 NIK → Hasil dikirim sebagai teks\n` +
+            `• > 10 NIK → Hasil dikirim sebagai file Excel\n\n` +
+            `⏱️ _Proses ±1-3 menit tergantung jumlah NIK_\n\n` +
+            `💡 Kirim NIK sekarang...`,
+            {
+                parse_mode: 'Markdown',
+reply_markup: {
+    keyboard: [
+        [{ text: '⋪ ❌ 𝗕𝗔𝗧𝗔𝗟 ⋫', style: COLOR.DANGER }],
+        [{ text: '⋪ 🔙 𝗞𝗘𝗠𝗕𝗔𝗟𝗜 𝗞𝗘 𝗠𝗘𝗡𝗨 ⋫', style: COLOR.PRIMARY }]
+    ],
+    resize_keyboard: true,
+    one_time_keyboard: false
+}
+            }
+        );
+        return { handled: true, action: 'CEKDPT_V2' };
+    }
+    
     // 🔥 TOPUP
     if (text === '⋪ 𝗧𝗢𝗣𝗨𝗣 ⋫') {
         console.log(`[MENU-FIRST] Topup: ${chatId}`);
