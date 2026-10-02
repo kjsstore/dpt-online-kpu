@@ -117,6 +117,42 @@ function isCaptchaPage(rawText) {
 }
 
 // ==========================================
+// 🔥 DETEKSI CAPTCHA DARI RESPONS API (WAJIB)
+// ==========================================
+// PENTING: situs KPU menampilkan "Data anda belum terdaftar!" bahkan
+// ketika server menolak reCAPTCHA. Respon aslinya:
+//   {"errors":[{"message":"INVALID_CAPTCHA, are you robot ?",
+//              "statusCode":"400"}],"data":{"findNikPilkada":null}}
+// Jadi kalau hanya membaca teks halaman, captcha yang gagal akan
+// TERLALAH dikira "tidak terdaftar" — jawaban yang salah.
+// Karena itu payload respons juga harus diperiksa.
+let captchaApiError = null;
+let captchaApiSeen = false;
+
+function watchCaptchaResponses(page) {
+    if (!page || typeof page.on !== 'function') return;
+    page.on('response', async (res) => {
+        let u = '';
+        try { u = res.url(); } catch (e) { return; }
+        if (!/\/v2(\?|$)/.test(u)) return;
+        let body = null;
+        try { body = await res.text(); } catch (e) { return; }
+        if (!body) return;
+        const hit = matchCaptcha(body);
+        if (hit) {
+            captchaApiError = hit;
+            captchaApiSeen = true;
+            console.log(`🛰️  [CAPTCHA-API] Server menolak: "${hit}" (dari respons /v2)`);
+        }
+    });
+}
+
+function resetCaptchaApiState() {
+    captchaApiError = null;
+    captchaApiSeen = false;
+}
+
+// ==========================================
 // 🔥 STATE
 // ==========================================
 let globalOtp = null;
@@ -222,6 +258,7 @@ async function initBrowser() {
             pageInstance.setDefaultNavigationTimeout(CONFIG.timeout);
 
             await warmUpPage(pageInstance);
+            watchCaptchaResponses(pageInstance);
 
             console.log(`✅ [BROWSER] Chrome siap (profil persisten: ${PROFILE_DIR})`);
             return pageInstance;
@@ -254,6 +291,7 @@ async function initBrowser() {
     pageInstance.setDefaultNavigationTimeout(CONFIG.timeout);
 
     await warmUpPage(pageInstance);
+    watchCaptchaResponses(pageInstance);
 
     console.log('✅ [BROWSER] Browser siap');
     return pageInstance;
@@ -554,8 +592,21 @@ async function detectCaptchaPage() {
         if (!pageInstance) return { detected: false, reason: null, text: '' };
         const text = await pageInstance.evaluate(() => document.body.innerText || '');
         const hit = matchCaptcha(text);
-        return { detected: hit !== null, reason: hit, text };
+        // Respons API menang: teks halaman bisa menampilkan
+        // "Data anda belum terdaftar!" walau captcha-nya ditolak.
+        if (hit) return { detected: true, reason: hit, text };
+        if (captchaApiSeen) {
+            return {
+                detected: true,
+                reason: `${captchaApiError} (dari respons API /v2)`,
+                text,
+            };
+        }
+        return { detected: false, reason: null, text };
     } catch (e) {
+        if (captchaApiSeen) {
+            return { detected: true, reason: `${captchaApiError} (dari respons API /v2)`, text: '' };
+        }
         return { detected: false, reason: null, text: '' };
     }
 }
@@ -825,6 +876,10 @@ async function checkSingleNik(nik, phoneNumber = null) {
         console.log('\n' + '='.repeat(60));
         console.log(`🔍 [CHECK] Memproses NIK: ${nik} (Percobaan ${attempt}/${MAX_RETRY})`);
         console.log('='.repeat(60));
+
+        // Reset penanda captcha per percobaan, supaya respons dari
+        // percobaan sebelumnya tidak ikut terhitung.
+        resetCaptchaApiState();
 
         const result = {
             nik, phone: phoneNumber, status: 'pending',
@@ -1199,7 +1254,18 @@ async function checkSingleNik(nik, phoneNumber = null) {
                 return capRetry.result;
             }
 
-            if (notRegMuncul && !otpFieldMuncul) {
+            // ⚠️ Halaman "Data anda belum terdaftar!" juga muncul ketika server
+// menolak reCAPTCHA. Sebelum menyimpulkan not_registered, pastikan
+// dulu tidak ada respons INVALID_CAPTCHA dari /v2.
+if (notRegMuncul && !otpFieldMuncul) {
+                if (captchaApiSeen) {
+                    const capRetry = await handleCaptchaRetry(
+                        nik, phoneNumber, attempt,
+                        `${captchaApiError} (dari respons API /v2)`, ''
+                    );
+                    if (capRetry.retry) continue;
+                    return capRetry.result;
+                }
                 console.log(`❌ [NOT-REG] NIK ${nik} TIDAK TERDAFTAR`);
                 await takeScreenshot(`not_registered_${nik}`);
                 result.status = 'not_registered';
