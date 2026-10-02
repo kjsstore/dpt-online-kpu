@@ -48,6 +48,8 @@ async function buildExcel(results, outputPath) {
         let statusCek;
         if (r.status === 'success') statusCek = 'BERHASIL';
         else if (r.status === 'not_registered') statusCek = 'TIDAK TERDAFTAR';
+        else if (r.status === 'otp_mismatch') statusCek = 'OTP SALAH';
+        else if (r.status === 'timeout') statusCek = 'TIMEOUT SERVER';
         else statusCek = 'GAGAL';
 
         ws.addRow({

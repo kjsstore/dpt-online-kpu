@@ -443,8 +443,13 @@ function parseDptResult(rawText) {
         if (m) out.nama = m[1].replace(/[,;]+$/, '').trim();
     }
 
-    if (/tidak\s+terdaftar/i.test(flat)) out.status = 'TIDAK TERDAFTAR';
-    else if (/\bterdaftar\b/i.test(flat)) out.status = 'TERDAFTAR';
+    // 🔥 Status: cek dulu penolakan, baru positives.
+// "Data anda belum terdaftar!" mengandung kata "terdaftar" — harus dicek lebih dulu.
+if (/tidak\s+terdaftar/i.test(flat) || /belum\s+terdaftar/i.test(flat)) {
+    out.status = 'TIDAK TERDAFTAR';
+} else if (/\bterdaftar\b/i.test(flat)) {
+    out.status = 'TERDAFTAR';
+}
 
     for (const line of lines) {
         const m = line.match(/^Wilayah\s*[:\-]\s*(.+)$/i);
@@ -462,6 +467,77 @@ function parseDptResult(rawText) {
     else if (/data\s+valid/i.test(flat)) out.validasi = 'DATA VALID';
 
     return out;
+}
+
+// ==========================================
+// 🔥 KLASIFIKASI HASIL (STRING PERSIS DARI BUNDLE SITUS)
+// home.js / index.js:
+//   notMatch  -> "Oops, Something went wrong.." + "Maaf, kami tidak menemukan kecocokan request dengan OTP anda."
+//   rto       -> "Galat, Gateway Time-out!" + screen.error
+//   notreg    -> screen.notregistered  = "Data anda belum terdaftar!"
+//   success   -> "Selamat, <nama>" + "Anda telah terdaftar dalam database"
+// ==========================================
+const RESULT_SIGNATURES = {
+    OTP_MISMATCH: [
+        'oops, something went wrong',
+        'tidak menemukan kecocokan',
+        'kecocokan request dengan otp',
+    ],
+    TIMEOUT: [
+        'gateway time-out',
+        'gateway timeout',
+        'terjadi kesalahan saat berkomunikasi dengan server',
+    ],
+    NOT_REGISTERED: [
+        'data anda belum terdaftar',
+        'nik anda belum terdaftar',
+        'anda belum terdaftar',
+        'anda tidak ditemukan',
+    ],
+};
+
+const SUCCESS_SIGNATURES = [
+    'anda telah terdaftar dalam database',
+    'status validasi',
+    'daftar pemilih berkelanjutan',
+];
+
+function classifyResult(pageText) {
+    const flat = String(pageText || '').toLowerCase().replace(/\s+/g, ' ').trim();
+
+    // 1. OTP salah / tidak cocok
+    for (const s of RESULT_SIGNATURES.OTP_MISMATCH) {
+        if (flat.includes(s)) {
+            return { status: 'otp_mismatch', reason: `keyword "${s}"`, error: 'OTP tidak cocok atau kedaluwarsa' };
+        }
+    }
+
+    // 2. Timeout / error server
+    for (const s of RESULT_SIGNATURES.TIMEOUT) {
+        if (flat.includes(s)) {
+            return { status: 'timeout', reason: `keyword "${s}"`, error: 'Server KPU gagal merespons' };
+        }
+    }
+
+    // 3. NIK tidak terdaftar
+    for (const s of RESULT_SIGNATURES.NOT_REGISTERED) {
+        if (flat.includes(s)) {
+            return { status: 'not_registered', reason: `keyword "${s}"`, error: 'Data belum terdaftar di DPT' };
+        }
+    }
+
+    // 4. Berhasil — wajib ada tanda positives, bukan sekadar "tidak ada error"
+    const hasPositive = SUCCESS_SIGNATURES.some(s => flat.includes(s));
+    if (hasPositive) {
+        return { status: 'success', reason: 'tanda "terdaftar" ditemukan' };
+    }
+
+    // 5. Halaman tidak dikenali — jangan dianggap sukses diam-diam
+    return {
+        status: 'failed',
+        reason: 'tidak ada tanda hasil yang dikenali',
+        error: 'Halaman hasil tidak dikenali (bukan data DPT). Cek screenshot.',
+    };
 }
 
 // ==========================================
@@ -494,10 +570,24 @@ async function checkSingleNik(nik, phoneNumber = null) {
                 console.log(`⚠️ [STEP 0] goto warning: ${e.message}`);
             }
 
-            const nikInput = await findVisible(
-                'textarea, input[type="text"], input[type="number"], input[placeholder*="NIK" i], input[name*="nik" i]',
-                8000
-            );
+            // 🔥 Tunggu heading NIK muncul dulu (Vue SPA butuh render).
+            // Selector saja bisa terlalu cepat, terutama cold-start di server.
+            console.log('⏳ [STEP 0] Tunggu form NIK siap...');
+            let formReady = true;
+            try {
+                await pageInstance.waitForFunction(
+                    () => (document.body.innerText || '').includes('Nomor Induk Kependudukan'),
+                    { timeout: 25000, polling: 300 }
+                );
+            } catch (e) {
+                formReady = false;
+                console.log('⚠️ [STEP 0] Heading NIK tidak muncul dalam 25s');
+            }
+
+            const nikInput = formReady
+                ? await findVisible('input.form-control', 10000)
+                : null;
+
             if (!nikInput) throw new Error('Input NIK tidak ditemukan');
 
             await takeScreenshot(`01_home_${nik}`);
@@ -953,16 +1043,19 @@ async function checkSingleNik(nik, phoneNumber = null) {
             const parsed = parseDptResult(pageText);
             console.log(`📊 [STEP 8] Hasil parse:`, JSON.stringify(parsed, null, 2));
 
-            const lower = pageText.toLowerCase();
-            const isSuccess = !lower.includes('gagal') &&
-                              !lower.includes('tidak ditemukan') &&
-                              !lower.includes('invalid') &&
-                              pageText.length > 50;
+            // 🔥 KLASIFIKASI AKURAT (string persis dari bundle situs)
+            const verdict = classifyResult(pageText);
 
-            result.status = isSuccess ? 'success' : 'failed';
-            result.data = { ...parsed, raw_text: pageText.substring(0, 5000), url: pageInstance.url() };
+            result.status = verdict.status;
+            result.error = verdict.error || null;
+            result.data = {
+                ...parsed,
+                status_label: parsed.status,
+                raw_text: pageText.substring(0, 5000),
+                url: pageInstance.url(),
+            };
 
-            console.log(`📊 [STEP 8] Status: ${result.status}`);
+            console.log(`📊 [STEP 8] Status: ${result.status} (${verdict.reason})`);
             return result;
 
         } catch (error) {
