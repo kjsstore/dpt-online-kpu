@@ -548,10 +548,68 @@ function classifyResult(pageText) {
 }
 
 // ==========================================
-// 🔥 CEK 1 NIK - FLOW FINAL
+// VALIDASI FORMAT NIK (CEK CEPAT - TANPA BROWSER)
+// ==========================================
+// KPU hanya memvalidasi format di langkah 2; membership DPT baru dicek
+// di langkah 3 saat mengirim OTP. Jadi NIK format-salah wasting ~25 detik
+// per NIK kalau tetap dibuka di browser. Tolak lebih dulu di sini.
+function validateNikFormat(nik) {
+    const s = String(nik || '').trim();
+
+    if (!/^\d{16}$/.test(s)) {
+        return { valid: false, reason: `harus 16 digit angka (terisi ${s.length})` };
+    }
+
+    const prov = parseInt(s.slice(0, 2), 10);
+    const dd = parseInt(s.slice(8, 10), 10);
+    const mm = parseInt(s.slice(10, 12), 10);
+    const yy = parseInt(s.slice(12, 14), 10);
+
+    if (prov < 11 || prov > 94) return { valid: false, reason: `kode provinsi tidak valid (${s.slice(0, 2)})` };
+    if (mm < 1 || mm > 12) return { valid: false, reason: `bulan lahir tidak valid (${s.slice(10, 12)})` };
+    if (dd < 1 || dd > 31) return { valid: false, reason: `tanggal lahir tidak valid (${s.slice(8, 10)})` };
+
+    const maxDay = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][mm - 1];
+    if (dd > maxDay) return { valid: false, reason: `tanggal ${dd} tidak ada di bulan ${mm}` };
+
+    // Tahun lahir 2 digit: coba 2000+yy dulu, kalau sudah di masa depan
+    // mundur ke 1900+yy. (Aturan ini otomatis adapting, tidak hardcode.)
+    const nowYear = new Date().getFullYear();
+    let tahun = 2000 + yy;
+    if (tahun > nowYear) tahun = 1900 + yy;
+    if (tahun < 1900 || tahun > nowYear) {
+        return { valid: false, reason: `tahun lahir tidak valid (${s.slice(12, 14)})` };
+    }
+
+    return {
+        valid: true,
+        lahir: `${String(dd).padStart(2, '0')}/${String(mm).padStart(2, '0')}/${tahun}`,
+        jk: dd % 2 === 1 ? 'L' : 'P',
+    };
+}
+
+// ==========================================
+// ?? CEK 1 NIK - FLOW FINAL
 // ==========================================
 async function checkSingleNik(nik, phoneNumber = null) {
     if (!phoneNumber) phoneNumber = getActivePhone();
+
+    // Validasi format dulu - hemat ~25 detik per NIK cacat
+    const fmt = validateNikFormat(nik);
+    if (!fmt.valid) {
+        console.log(`?? [CEK] NIK ${nik} dilewati (format tidak valid: ${fmt.reason})`);
+        return {
+            nik, phone: phoneNumber, status: 'invalid_format',
+            data: {
+                nama: '-', status: 'NIK TIDAK VALID', wilayah: '-',
+                tanggal: '-', validasi: '-', raw_text: fmt.reason,
+                url: null,
+            },
+            error: `Format NIK tidak valid: ${fmt.reason}`,
+            timestamp: new Date().toISOString(),
+        };
+    }
+
 
     const MAX_RETRY = 3;
 
@@ -1069,14 +1127,21 @@ async function checkSingleNik(nik, phoneNumber = null) {
             console.error(`❌ [CHECK] Error NIK ${nik} (percobaan ${attempt}):`, error.message);
 
             if (attempt < MAX_RETRY) {
+                // pageInstance bisa null kalau browser gagal init / crash.
+                // Tanpa guard ini, catch ikut lempar error dan proses bot mati.
+                if (!pageInstance) {
+                    result.status = 'error';
+                    result.error = `Browser tidak siap: ${error.message}`;
+                    break;
+                }
                 console.log(`🔄 [RETRY] Percobaan ${attempt} gagal, ulang (${attempt + 1}/${MAX_RETRY})...`);
-                await pageInstance.waitForTimeout(2000);
+                await pageInstance.waitForTimeout(2000).catch(() => {});
                 continue;
             }
 
             result.status = 'error';
             result.error = error.message;
-            if (CONFIG.screenshotOnError) await takeScreenshot(`error_${nik}`);
+            if (CONFIG.screenshotOnError) await takeScreenshot(`error_${nik}`).catch(() => {});
         }
     }
 

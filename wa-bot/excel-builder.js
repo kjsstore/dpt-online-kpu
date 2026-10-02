@@ -49,8 +49,9 @@ async function buildExcel(results, outputPath) {
         if (r.status === 'success') statusCek = 'BERHASIL';
         else if (r.status === 'not_registered') statusCek = 'TIDAK TERDAFTAR';
         else if (r.status === 'otp_mismatch') statusCek = 'OTP SALAH';
-        else if (r.status === 'timeout') statusCek = 'TIMEOUT SERVER';
-        else statusCek = 'GAGAL';
+else if (r.status === 'timeout') statusCek = 'TIMEOUT SERVER';
+    else if (r.status === 'invalid_format') statusCek = 'NIK TIDAK VALID';
+    else statusCek = 'GAGAL';
 
         ws.addRow({
             no: idx + 1,
