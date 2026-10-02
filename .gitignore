@@ -25,6 +25,16 @@ sessions.bak_*
 wa-bot/sessions.bak_*
 *.session
 
+# Profil Chrome Playwright (WAJIB diabaikan!)
+# Berisi cookie, Local Storage, dan sid reCAPTCHA KPU.
+# Kalau ikut ter-commit, cookie sesi login bisa bocor.
+.kpu-profile/
+**/.kpu-profile/
+
+# Screenshot diagnostik
+wa-bot/screenshots/
+screenshots/*.png
+
 # Database
 *.sqlite
 *.sqlite3

@@ -9,10 +9,20 @@ const fs = require('fs');
 const path = require('path');
 
 const KPU_URL = 'https://cekdptonline.kpu.go.id/';
-const DEFAULT_PHONE = '083830803474';
+const DEFAULT_PHONE = '6283830803474';
 const RESULT_FILE = path.join(__dirname, 'hasil_cek_dpt.json');
 const SCREENSHOT_DIR = path.join(__dirname, 'screenshots');
 const NOMOR_BOT_FILE = path.join(__dirname, 'nomor_bot.json');
+
+// ==========================================
+// 🔥 PROFIL CHROME PERSISTEN (WAJIB UNTUK CAPTCHA)
+// ==========================================
+// reCAPTCHA KPU menolak profil anonim: setiap launch()/context baru
+// berarti cookie & sid baru, sehingga skor risiko selalu tinggi dan
+// server membalas "INVALID_CAPTCHA, are you robot ?". Dengan profil
+// persisten, sid dari request sebelumnya ikut terbawa sehingga
+// challenge berikutnya jauh lebih mungkin lolos.
+const PROFILE_DIR = path.join(__dirname, '.kpu-profile');
 
 // ==========================================
 // 🔥 BACA NOMOR BOT DARI FILE (LANGSUNG FORMAT 62)
@@ -54,6 +64,14 @@ const CONFIG = {
     otpTimeout: 180000,
     phoneNumber: DEFAULT_PHONE,
     screenshotOnError: true,
+
+    // Pakai Chrome asli (channel: 'chrome') + profil persisten.
+    // Setel false hanya untuk debug: captcha hampir pasti ditolak.
+    persistentProfile: true,
+    chromeChannel: 'chrome',
+
+    // Backoff retry captcha: attempt 1 -> 5s, 2 -> 10s, 3 -> 15s.
+    captchaBaseDelayMs: 5000,
 };
 
 // ==========================================
@@ -69,12 +87,43 @@ const NOT_REGISTERED_KEYWORDS = [
 const NOT_REGISTERED_PAGE_TIMEOUT = 8000;
 
 // ==========================================
+// 🔥 KEYWORD DETEKSI CAPTCHA
+// ==========================================
+// PENTING: server KPU memakai statusCode "400" untuk DUA kondisi yang
+// sama-sama gagal: reCAPTCHA ditolak DAN NIK tidak ditemukan.
+// Jadi status code tidak bisa dipakai untuk membedakan keduanya —
+// yang dipakai adalah TEKS pesan. Captcha dicek LEBIH DAHULU.
+const CAPTCHA_SIGNATURES = [
+    'invalid_captcha',
+    'invalid captcha',
+    'are you robot',
+    'captcha tidak valid',
+    'verifikasi captcha',
+    'verify you are human',
+];
+
+const CAPTCHA_MAX_RETRY = 3;
+
+function matchCaptcha(rawText) {
+    const flat = String(rawText || '').toLowerCase().replace(/\s+/g, ' ');
+    for (const s of CAPTCHA_SIGNATURES) {
+        if (flat.includes(s)) return s;
+    }
+    return null;
+}
+
+function isCaptchaPage(rawText) {
+    return matchCaptcha(rawText) !== null;
+}
+
+// ==========================================
 // 🔥 STATE
 // ==========================================
 let globalOtp = null;
 let globalOtpTime = null;
 let otpResolver = null;
 let browserInstance = null;
+let contextInstance = null;
 let pageInstance = null;
 
 let isProcessing = false;
@@ -130,47 +179,120 @@ function readNikFromExcel(filePath) {
 }
 
 // ==========================================
-// 🔥 INIT BROWSER
+// 🔥 INIT BROWSER — CHROME ASLI + PROFIL PERSISTEN
 // ==========================================
 async function initBrowser() {
     console.log('🌐 [BROWSER] Membuka browser...');
 
+    const args = [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-blink-features=AutomationControlled',
+        '--disable-dev-shm-usage',
+    ];
+
+    // Samakan navigator.webdriver & bahasa dengan browser asli.
+    const stealth = () => {
+        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    };
+
+    if (CONFIG.persistentProfile) {
+        try {
+            if (!fs.existsSync(PROFILE_DIR)) {
+                fs.mkdirSync(PROFILE_DIR, { recursive: true });
+            }
+
+            // CATATAN: TIDAK set userAgent. Memalsukan UA ke versi lama
+            // bikin fingerprint UA tidak cocok dengan fingerprint engine
+            // Chrome yang sebenarnya — itu sendiri pemicu skor captcha tinggi.
+            contextInstance = await chromium.launchPersistentContext(PROFILE_DIR, {
+                channel: CONFIG.chromeChannel,
+                headless: CONFIG.headless,
+                slowMo: CONFIG.slowMo,
+                args,
+                viewport: { width: 1280, height: 800 },
+                locale: 'id-ID',
+            });
+
+            browserInstance = contextInstance.browser();
+            await contextInstance.addInitScript(stealth);
+
+            pageInstance = contextInstance.pages()[0] || await contextInstance.newPage();
+            pageInstance.setDefaultTimeout(CONFIG.timeout);
+            pageInstance.setDefaultNavigationTimeout(CONFIG.timeout);
+
+            await warmUpPage(pageInstance);
+
+            console.log(`✅ [BROWSER] Chrome siap (profil persisten: ${PROFILE_DIR})`);
+            return pageInstance;
+        } catch (e) {
+            console.log(`⚠️ [BROWSER] Gagal pakai Chrome persisten: ${e.message}`);
+            console.log('⚠️ [BROWSER] Fallback ke Chromium non-persistent — captcha kemungkinan ditolak.');
+            try {
+                if (contextInstance) await contextInstance.close().catch(() => {});
+            } catch (e2) {}
+            contextInstance = null;
+            browserInstance = null;
+        }
+    }
+
     browserInstance = await chromium.launch({
         headless: CONFIG.headless,
         slowMo: CONFIG.slowMo,
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-blink-features=AutomationControlled',
-            '--disable-dev-shm-usage',
-        ],
+        args,
     });
 
     const context = await browserInstance.newContext({
         viewport: { width: 1280, height: 800 },
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         locale: 'id-ID',
     });
 
-    await context.addInitScript(() => {
-        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-    });
+    await context.addInitScript(stealth);
 
     pageInstance = await context.newPage();
     pageInstance.setDefaultTimeout(CONFIG.timeout);
     pageInstance.setDefaultNavigationTimeout(CONFIG.timeout);
 
+    await warmUpPage(pageInstance);
+
     console.log('✅ [BROWSER] Browser siap');
     return pageInstance;
 }
 
+// ==========================================
+// 🔥 WARM-UP: gerakan mouse + scroll ringan
+// ==========================================
+// Request pertama dari profil yang baru dibuat selalu terlihat seperti bot.
+// Gerak mouse acak singkat sebelum halaman sungguhan dibuka menurunkan
+// pola "0 interaksi lalu langsung POST".
+async function warmUpPage(page) {
+    try {
+        await page.mouse.move(120 + Math.floor(Math.random() * 200), 180 + Math.floor(Math.random() * 120));
+        await page.waitForTimeout(120);
+        await page.mouse.move(420 + Math.floor(Math.random() * 200), 320 + Math.floor(Math.random() * 140));
+        await page.waitForTimeout(150);
+        await page.mouse.move(680 + Math.floor(Math.random() * 160), 240 + Math.floor(Math.random() * 160));
+        await page.waitForTimeout(120);
+        await page.mouse.wheel(0, 180);
+        await page.waitForTimeout(100);
+        await page.mouse.wheel(0, -220);
+        await page.waitForTimeout(80);
+    } catch (e) {}
+}
+
 async function closeBrowser() {
-    if (browserInstance) {
-        try { await browserInstance.close(); } catch (e) {}
-        browserInstance = null;
-        pageInstance = null;
-        console.log('🔒 [BROWSER] Browser ditutup');
-    }
+    try {
+        if (contextInstance) {
+            await contextInstance.close();
+        } else if (browserInstance) {
+            await browserInstance.close();
+        }
+    } catch (e) {}
+
+    contextInstance = null;
+    browserInstance = null;
+    pageInstance = null;
+    console.log('🔒 [BROWSER] Browser ditutup');
 }
 
 // ==========================================
@@ -425,6 +547,59 @@ async function waitForNotRegisteredPage(timeout = NOT_REGISTERED_PAGE_TIMEOUT) {
 }
 
 // ==========================================
+// 🔥 DETEKSI CAPTCHA DI HALAMAN SAAT INI
+// ==========================================
+async function detectCaptchaPage() {
+    try {
+        if (!pageInstance) return { detected: false, reason: null, text: '' };
+        const text = await pageInstance.evaluate(() => document.body.innerText || '');
+        const hit = matchCaptcha(text);
+        return { detected: hit !== null, reason: hit, text };
+    } catch (e) {
+        return { detected: false, reason: null, text: '' };
+    }
+}
+
+function captchaBackoffMs(attempt) {
+    return CONFIG.captchaBaseDelayMs * Math.max(1, attempt);
+}
+
+function buildCaptchaResult(nik, phoneNumber, reason, text) {
+    return {
+        nik,
+        phone: phoneNumber,
+        status: 'captcha_failed',
+        data: {
+            nama: '-', status: 'CAPTCHA GAGAL', wilayah: '-',
+            tanggal: '-', validasi: '-',
+            raw_text: String(text || '').substring(0, 5000),
+            captcha_reason: reason || null,
+            url: pageInstance ? pageInstance.url() : null,
+        },
+        error: 'reCAPTCHA KPU ditolak (INVALID_CAPTCHA). Profil browser persisten dipakai agar cookie diteruskan; ulangi percobaan.',
+        timestamp: new Date().toISOString(),
+    };
+}
+
+// Retry khusus captcha: tunggu backoff lalu ulang dari STEP 0.
+// Kalau attempt terakhir, kembalikan status 'captcha_failed' —
+// BUKAN error generik, supaya bisa dibedakan dari kegagalan lain
+// dan tidak dilaporkan sebagai "tidak terdaftar".
+async function handleCaptchaRetry(nik, phoneNumber, attempt, reason, text) {
+    await takeScreenshot(`captcha_failed_${nik}_a${attempt}`).catch(() => {});
+
+    if (attempt < CAPTCHA_MAX_RETRY) {
+        const delay = captchaBackoffMs(attempt);
+        console.log(`🔄 [CAPTCHA] ${reason} — tunggu ${Math.round(delay / 1000)}s lalu retry (${attempt + 1}/${CAPTCHA_MAX_RETRY})`);
+        await pageInstance.waitForTimeout(delay).catch(() => {});
+        return { retry: true };
+    }
+
+    console.log(`❌ [CAPTCHA] Gagal terus setelah ${CAPTCHA_MAX_RETRY} percobaan`);
+    return { retry: false, result: buildCaptchaResult(nik, phoneNumber, reason, text) };
+}
+
+// ==========================================
 // 🔥 PARSE HASIL DPT
 // ==========================================
 function parseDptResult(rawText) {
@@ -512,6 +687,19 @@ const SUCCESS_SIGNATURES = [
 function classifyResult(pageText) {
     const flat = String(pageText || '').toLowerCase().replace(/\s+/g, ' ').trim();
 
+    // 0. CAPTCHA ditolak — WAJIB paling awal.
+    // Server memakai statusCode "400" untuk captcha YANG SAMA dengan
+    // "tidak ditemukan". Kalau captcha tidak dicek duluan, NIK terdaftar
+    // bisa salah dilabeli "tidak terdaftar" padahal captcha-nya ditolak.
+    const cap = matchCaptcha(flat);
+    if (cap) {
+        return {
+            status: 'captcha_failed',
+            reason: `keyword "${cap}"`,
+            error: 'reCAPTCHA KPU ditolak (INVALID_CAPTCHA). Profil browser persisten dipakai agar cookie diteruskan; ulangi percobaan.',
+        };
+    }
+
     // 1. NIK tidak terdaftar (CEK DULU — lihat catatan di RESULT_SIGNATURES)
     for (const s of RESULT_SIGNATURES.NOT_REGISTERED) {
         if (flat.includes(s)) {
@@ -553,6 +741,20 @@ function classifyResult(pageText) {
 // KPU hanya memvalidasi format di langkah 2; membership DPT baru dicek
 // di langkah 3 saat mengirim OTP. Jadi NIK format-salah wasting ~25 detik
 // per NIK kalau tetap dibuka di browser. Tolak lebih dulu di sini.
+//
+// ⚠️ POSISI DIGIT (Kepmendagri No. 25/2002):
+//   digit  1-2 : provinsi
+//   digit  3-4 : kabupaten/kota
+//   digit  5-6 : kecamatan
+//   digit  7-8 : tanggal lahir (DD)
+//   digit  9-10: bulan lahir (MM)
+//   digit 11-12: tahun lahir (YY, 2 digit terakhir)
+//   digit 13-16: nomor urut
+//
+// Tanggal lahir menempati digit 7-12, BUKAN 9-14.
+// Versi lama memakai slice(8,10)/slice(10,12)/slice(12,14) sehingga
+// "bulan" terbaca dari digit tahun -> hampir semua NIK asli ditolak.
+// Contoh: 3602041211870001 = lahir 12 November 1987, laki-laki.
 function validateNikFormat(nik) {
     const s = String(nik || '').trim();
 
@@ -561,13 +763,19 @@ function validateNikFormat(nik) {
     }
 
     const prov = parseInt(s.slice(0, 2), 10);
-    const dd = parseInt(s.slice(8, 10), 10);
-    const mm = parseInt(s.slice(10, 12), 10);
-    const yy = parseInt(s.slice(12, 14), 10);
+    const ddRaw = parseInt(s.slice(6, 8), 10);
+    const mm = parseInt(s.slice(8, 10), 10);
+    const yy = parseInt(s.slice(10, 12), 10);
 
     if (prov < 11 || prov > 94) return { valid: false, reason: `kode provinsi tidak valid (${s.slice(0, 2)})` };
-    if (mm < 1 || mm > 12) return { valid: false, reason: `bulan lahir tidak valid (${s.slice(10, 12)})` };
-    if (dd < 1 || dd > 31) return { valid: false, reason: `tanggal lahir tidak valid (${s.slice(8, 10)})` };
+    if (mm < 1 || mm > 12) return { valid: false, reason: `bulan lahir tidak valid (${s.slice(8, 10)})` };
+
+    // Untuk perempuan, kode tanggal lahir ditambah 40 pada NIK.
+    // Contoh lahir 25 Feb 1987 -> tanggal pada NIK tertulis "65".
+    const jk = ddRaw > 40 ? 'P' : 'L';
+    const dd = ddRaw > 40 ? ddRaw - 40 : ddRaw;
+
+    if (dd < 1 || dd > 31) return { valid: false, reason: `tanggal lahir tidak valid (${s.slice(6, 8)})` };
 
     const maxDay = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][mm - 1];
     if (dd > maxDay) return { valid: false, reason: `tanggal ${dd} tidak ada di bulan ${mm}` };
@@ -578,13 +786,13 @@ function validateNikFormat(nik) {
     let tahun = 2000 + yy;
     if (tahun > nowYear) tahun = 1900 + yy;
     if (tahun < 1900 || tahun > nowYear) {
-        return { valid: false, reason: `tahun lahir tidak valid (${s.slice(12, 14)})` };
+        return { valid: false, reason: `tahun lahir tidak valid (${s.slice(10, 12)})` };
     }
 
     return {
         valid: true,
         lahir: `${String(dd).padStart(2, '0')}/${String(mm).padStart(2, '0')}/${tahun}`,
-        jk: dd % 2 === 1 ? 'L' : 'P',
+        jk,
     };
 }
 
@@ -722,15 +930,21 @@ async function checkSingleNik(nik, phoneNumber = null) {
 
             await pageInstance.waitForTimeout(5000);
 
-            // Polling field HP / OTP / not-reg (20 detik)
+            // Polling field HP / OTP / captcha / not-reg (20 detik)
             let hpField = null;
             let otpLangsungMuncul = false;
             let notRegStep2 = false;
+            let captchaStep2 = null;
 
             const step2Start = Date.now();
             const STEP2_MAX = 20000;
 
             while (Date.now() - step2Start < STEP2_MAX) {
+                // Captcha dicek paling awal: halaman sebelumnya masih
+                // menampilkan "Nomor HP" sementara server sudah menolak challenge.
+                const cap = await detectCaptchaPage();
+                if (cap.detected) { captchaStep2 = cap; break; }
+
                 hpField = await isPhoneFieldVisible();
                 if (hpField) break;
                 if (await isOtpFieldVisible()) { otpLangsungMuncul = true; break; }
@@ -739,6 +953,14 @@ async function checkSingleNik(nik, phoneNumber = null) {
             }
 
             await takeScreenshot(`03_after_next_${nik}`);
+
+            if (captchaStep2 && !hpField && !otpLangsungMuncul) {
+                const capRetry = await handleCaptchaRetry(
+                    nik, phoneNumber, attempt, captchaStep2.reason, captchaStep2.text
+                );
+                if (capRetry.retry) continue;
+                return capRetry.result;
+            }
 
             if (notRegStep2 && !hpField && !otpLangsungMuncul) {
                 console.log(`❌ [NOT-REG] NIK ${nik} TIDAK TERDAFTAR`);
@@ -932,6 +1154,18 @@ async function checkSingleNik(nik, phoneNumber = null) {
                 await pageInstance.waitForTimeout(8000);
                 await takeScreenshot(`04b_after_click_${nik}`);
 
+                // Challenge reCAPTCHA paling sering ditolak tepat di sini,
+                // saat tombol "Langkah 3/4" (kirim OTP) ditekan. Jangan
+                // langsung lanjut — cek dulu apakah server menolak captcha.
+                const capAfterSend = await detectCaptchaPage();
+                if (capAfterSend.detected) {
+                    const capRetry = await handleCaptchaRetry(
+                        nik, phoneNumber, attempt, capAfterSend.reason, capAfterSend.text
+                    );
+                    if (capRetry.retry) continue;
+                    return capRetry.result;
+                }
+
             } else {
                 console.log('✅ [STEP 3-4] Skip ke halaman OTP langsung');
             }
@@ -943,15 +1177,27 @@ async function checkSingleNik(nik, phoneNumber = null) {
 
             let otpFieldMuncul = false;
             let notRegMuncul = false;
+            let captchaStep5 = null;
             const step5Start = Date.now();
 
             while (Date.now() - step5Start < 15000) {
+                const cap = await detectCaptchaPage();
+                if (cap.detected) { captchaStep5 = cap; break; }
+
                 if (await isOtpFieldVisible()) { otpFieldMuncul = true; break; }
                 if (await isNotRegisteredPage()) { notRegMuncul = true; break; }
                 await pageInstance.waitForTimeout(300);
             }
 
             await takeScreenshot(`05_otp_page_${nik}`);
+
+            if (captchaStep5 && !otpFieldMuncul && !notRegMuncul) {
+                const capRetry = await handleCaptchaRetry(
+                    nik, phoneNumber, attempt, captchaStep5.reason, captchaStep5.text
+                );
+                if (capRetry.retry) continue;
+                return capRetry.result;
+            }
 
             if (notRegMuncul && !otpFieldMuncul) {
                 console.log(`❌ [NOT-REG] NIK ${nik} TIDAK TERDAFTAR`);
@@ -1092,8 +1338,15 @@ async function checkSingleNik(nik, phoneNumber = null) {
             console.log('📊 [STEP 8] Mengambil hasil...');
             const pageText = await pageInstance.evaluate(() => document.body.innerText || '');
 
-            const stillOnOtpPage = pageText.includes('OTP (One Time Password)') ||
-                                   pageText.includes('Masukan kode yang terkirim');
+            // Halaman hasil error masih bisa menyisakan heading OTP di DOM,
+            // jadi captcha harus dicek dulu — kalau tidak, pesan
+            // INVALID_CAPTCHA akan salah dilabeli "failed" generik.
+            const captchaDiHasil = isCaptchaPage(pageText);
+
+            const stillOnOtpPage = !captchaDiHasil && (
+                pageText.includes('OTP (One Time Password)') ||
+                pageText.includes('Masukan kode yang terkirim')
+            );
 
             if (stillOnOtpPage) {
                 console.log('❌ [STEP 8] MASIH DI HALAMAN OTP!');
@@ -1212,11 +1465,19 @@ module.exports = {
     waitForOtp,
     takeScreenshot,
     parseDptResult,
+    classifyResult,
+    validateNikFormat,
     isNotRegisteredPage,
     isOtpFieldVisible,
     isPhoneFieldVisible,
+    isCaptchaPage,
+    detectCaptchaPage,
+    matchCaptcha,
     waitForNotRegisteredPage,
     CONFIG,
     KPU_URL,
     RESULT_FILE,
+    PROFILE_DIR,
+    CAPTCHA_SIGNATURES,
+    DEFAULT_PHONE,
 };

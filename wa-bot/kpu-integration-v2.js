@@ -411,6 +411,11 @@ async function processBatchV2(sock, sessionKey, remoteJid, nikList) {
                 console.log(`   ✅ ${result.data?.nama || '-'} | ${result.data?.status || '-'}`);
             } else if (result.status === 'not_registered') {
                 console.log(`   ⚠️ TIDAK TERDAFTAR`);
+            } else if (result.status === 'captcha_failed') {
+                // Jangan samakan captcha dengan "tidak terdaftar": reCAPTCHA
+                // ditolak != NIK tidak ada. Statusnya harus dibedakan agar
+                // pengguna tahu masalahnya CAPTCHA, bukan data DPT.
+                console.log(`   🤖 CAPTCHA DITOLAK (bukan berarti NIK tidak terdaftar)`);
             } else {
                 console.log(`   ❌ ${result.error || 'Gagal'}`);
             }
@@ -425,7 +430,10 @@ async function processBatchV2(sock, sessionKey, remoteJid, nikList) {
 
         const successCount = session.results.filter(r => r.status === 'success').length;
         const notRegCount = session.results.filter(r => r.status === 'not_registered').length;
-        const failedCount = session.results.filter(r => r.status !== 'success' && r.status !== 'not_registered').length;
+        const captchaCount = session.results.filter(r => r.status === 'captcha_failed').length;
+        const failedCount = session.results.filter(
+            r => !['success', 'not_registered', 'captcha_failed'].includes(r.status)
+        ).length;
 
         // 🔥 Simpan ke Excel (untuk dikirim ke Telegram via bridge)
         try {
@@ -452,7 +460,7 @@ async function processBatchV2(sock, sessionKey, remoteJid, nikList) {
                 document: fs.readFileSync(excelPath),
                 mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                 fileName: `Hasil_Cek_DPT_V2_${timestamp}.xlsx`,
-                caption: `📊 *HASIL CEK DPT V2*\n\nTotal: ${nikList.length} NIK\n✅ ${successCount} | ⚠️ ${notRegCount} | ❌ ${failedCount}`
+                caption: `📊 *HASIL CEK DPT V2*\n\nTotal: ${nikList.length} NIK\n✅ ${successCount} | ⚠️ ${notRegCount} | 🤖 ${captchaCount} | ❌ ${failedCount}`
             });
 
             console.log(`✅ [KPU V2] File Excel terkirim ke WA`);
@@ -494,7 +502,7 @@ async function processBatchV2(sock, sessionKey, remoteJid, nikList) {
         // 🔥 Kirim ringkasan
         let ringkasanText = `📊 *HASIL CEK DPT V2*\n\n` +
                             `Total: ${nikList.length} NIK\n` +
-                            `✅ ${successCount} | ⚠️ ${notRegCount} | ❌ ${failedCount}\n\n`;
+                            `✅ ${successCount} | ⚠️ ${notRegCount} | 🤖 ${captchaCount} | ❌ ${failedCount}\n\n`;
 
         if (isOwner) {
             ringkasanText += `━━━━━━━━━━━━━━━━━━\n`;
